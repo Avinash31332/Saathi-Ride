@@ -1,5 +1,4 @@
 import { supabase } from "./supabase";
-import { updateDriverRideCount } from "./review.service";
 
 export async function getRidePassengers(
   driverId: string
@@ -7,16 +6,17 @@ export async function getRidePassengers(
   return await supabase
     .from("rides")
     .select(`
-      *,
-      bookings (
-        *,
-        profiles (
+          *,
+          bookings!inner(
+          *,
+          profiles (
           full_name,
           phone
         )
       )
     `)
     .eq("driver_id", driverId)
+    .eq("bookings.booking_status","confirmed")
     .order("ride_date");
 }
 
@@ -65,12 +65,12 @@ export async function completeRide(
 
   const result =
     await supabase
-      .from("rides")
-      .update({
-        ride_status:
-          "awaiting_confirmation",
-      })
-      .eq("id", rideId);
+.from("rides")
+.update({
+    ride_status: "awaiting_confirmation",
+    completion_mode: "ride"
+})
+.eq("id", rideId);
 
   return result;
 }

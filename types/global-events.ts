@@ -1,17 +1,23 @@
 export type GlobalEventType =
   | "rideCompletion"
   | "rideCompleted"
+  | "passengerDropRequest"
+  | "passengerDropReason"
   | "rideCancelled"
   | "payment"
   | "verification"
   | "sos";
 
 export interface GlobalEvent {
-    type: GlobalEventType;
+  id: string;
 
-    payload?: Record<string, any>;
+  type: GlobalEventType;
 
-    priority?: "low" | "normal" | "high";
+  payload?: Record<string, any>;
 
-    dismissible?: boolean;
+  priority: number;
+
+  dismissible: boolean;
+
+  createdAt: number;
 }

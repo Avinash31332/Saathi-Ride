@@ -10,7 +10,13 @@ export default function RootLayout() {
     <GlobalEventProvider>
       <RealtimeListener />
 
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          animation: "fade_from_bottom",
+          animationDuration: 300,
+        }}
+      >
         <Stack.Screen name="login" />
         <Stack.Screen name="signup" />
         <Stack.Screen name="(tabs)" />

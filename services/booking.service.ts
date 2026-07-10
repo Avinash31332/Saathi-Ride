@@ -227,59 +227,6 @@ export async function confirmRideCompletion(
   );
 }
 
-// export async function tryCompleteRide(
-//   rideId: string
-// ) {
-//   console.log("Checking if ride can be completed...");
-
-//   const { data: bookings, error } = await supabase
-//     .from("bookings")
-//     .select("*")
-//     .eq("ride_id", rideId)
-//     .eq("booking_status", "confirmed");
-
-//   console.log("Bookings:");
-//   console.log(bookings);
-
-//   console.log("Booking Error:");
-//   console.log(error);
-
-//   if (!bookings?.length) {
-//     console.log("No confirmed bookings");
-//     return;
-//   }
-
-//   const allConfirmed = bookings.every(
-//     booking => booking.ride_completion_confirmed
-//   );
-
-//   console.log("All confirmed:", allConfirmed);
-
-//   if (!allConfirmed) {
-//     console.log("Waiting for other passengers...");
-//     return;
-//   }
-
-//   console.log("Updating ride...");
-
-//   const result = await supabase
-//   .from("rides")
-//   .update({
-//     ride_status: "completed",
-//     completed_at: new Date().toISOString(),
-//   })
-//   .eq("id", rideId)
-//   .select("*");
-//   console.log("Rows Updated:", result.data?.length);
-
-//   console.log("Update Result:");
-//   console.log(result.data);
-
-//   console.log("Update Error:");
-//   console.log(result.error);
-
-//   return result;
-// }
 
 export async function hasPassengerConfirmed(
   rideId: string,
@@ -317,3 +264,71 @@ export async function getPendingRideConfirmation(
     .eq("ride_completion_confirmed", false)
     .eq("rides.ride_status","awaiting_confirmation");
 }
+
+export async function requestPassengerDrop(
+  bookingId: string
+) {
+  return await supabase.rpc(
+    "request_passenger_drop",
+    {
+      booking_id: bookingId,
+    }
+  );
+}
+
+export async function confirmPassengerDrop(
+  bookingId: string,
+  reason: string
+) {
+  return await supabase.rpc(
+    "confirm_passenger_drop",
+    {
+      booking_id: bookingId,
+      drop_reason_value: reason,
+    }
+  );
+}
+
+export async function declinePassengerDrop(
+  bookingId: string
+) {
+  return await supabase.rpc(
+    "decline_passenger_drop",
+    {
+      booking_id: bookingId,
+    }
+  );
+}
+
+// export async function finishRideIfNeeded(
+//   rideId: string
+// ) {
+//   const { data: bookings } =
+//     await supabase
+//       .from("bookings")
+//       .select("*")
+//       .eq("ride_id", rideId);
+
+//   if (!bookings) return;
+
+//   const remaining =
+//     bookings.filter(
+//       booking =>
+//         booking.booking_status ===
+//         "confirmed"
+//     );
+
+//   if (remaining.length > 0) {
+//     return;
+//   }
+
+//   return await supabase
+//     .from("rides")
+//     .update({
+//       ride_status: "completed",
+
+//       completed_at:
+//         new Date().toISOString(),
+//     })
+//     .eq("id", rideId);
+// }

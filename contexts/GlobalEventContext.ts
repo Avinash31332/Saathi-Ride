@@ -1,21 +1,35 @@
-import {
-  createContext,
-} from "react";
+import { createContext } from "react";
 
 import {
   GlobalEvent,
+  GlobalEventType,
 } from "../types/global-events";
 
 interface ContextType {
-  event: GlobalEvent | null;
+  currentEvent: GlobalEvent | null;
 
-  setEvent: (
-    event: GlobalEvent | null
+  publish: (
+    type: GlobalEventType,
+    payload?: Record<string, any>,
+    customId?: string,
   ) => void;
+
+  closeCurrentEvent: () => void;
+
+  clearEvents: () => void;
+
+  queueSize: () => number;
 }
 
 export const GlobalEventContext =
   createContext<ContextType>({
-    event: null,
-    setEvent: () => {},
+    currentEvent: null,
+
+    publish: () => {},
+
+    closeCurrentEvent: () => {},
+
+    clearEvents: () => {},
+
+    queueSize: () => 0,
   });

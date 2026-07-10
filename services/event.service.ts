@@ -1,55 +1,98 @@
 import useGlobalEvents from "../hooks/useGlobalEvents";
 
 export function useEventService() {
-  const { setEvent } = useGlobalEvents();
+  const { publish } = useGlobalEvents();
 
   return {
+    //------------------------------------------------
+    // Ride Completion
+    //------------------------------------------------
 
-    showRideCompletion(payload:any){
-      setEvent({
-        type:"rideCompletion",
+    showRideCompletion(payload: any) {
+      publish(
+        "rideCompletion",
         payload,
-      });
+        `rideCompletion-${payload.bookingId}`,
+      );
     },
 
-    showRideCompleted(
-    payload:any,
-    isDriver:boolean
-){
-    setEvent({
-
-        type:"rideCompleted",
-
-        payload:{
-            ...payload,
-            isDriver,
-        }
-
-    });
-},
-
-    showPayment(payload:any){
-      setEvent({
-        type:"payment",
-        payload,
-      });
+    showRideCompleted(payload: any, isDriver: boolean) {
+      publish(
+        "rideCompleted",
+        {
+          ...payload,
+          isDriver,
+        },
+        `rideCompleted-${payload.rideId}-${payload.reviewerId}`,
+      );
     },
 
-    showVerification(payload:any){
-      setEvent({
-        type:"verification",
+    //------------------------------------------------
+    // Passenger Drop
+    //------------------------------------------------
+
+    showPassengerDropRequest(payload: any) {
+      publish(
+        "passengerDropRequest",
         payload,
-      });
+        `dropRequest-${payload.bookingId}`,
+      );
     },
 
-    showSOS(payload:any){
-      setEvent({
-        type:"sos",
+    showPassengerDropReason(payload: any) {
+      publish(
+        "passengerDropReason",
         payload,
-        priority:"high",
-        dismissible:false,
-      });
-    }
+        `dropReason-${payload.bookingId}`,
+      );
+    },
 
+    //------------------------------------------------
+    // Payment
+    //------------------------------------------------
+
+    showPayment(payload: any) {
+      publish(
+        "payment",
+        payload,
+        `payment-${payload.paymentId ?? Date.now()}`,
+      );
+    },
+
+    //------------------------------------------------
+    // Verification
+    //------------------------------------------------
+
+    showVerification(payload: any) {
+      publish(
+        "verification",
+        payload,
+        `verification-${payload.userId ?? Date.now()}`,
+      );
+    },
+
+    //------------------------------------------------
+    // Ride Cancelled
+    //------------------------------------------------
+
+    showRideCancelled(payload: any) {
+      publish(
+        "rideCancelled",
+        payload,
+        `rideCancelled-${payload.rideId}`,
+      );
+    },
+
+    //------------------------------------------------
+    // SOS
+    //------------------------------------------------
+
+    showSOS(payload: any) {
+      publish(
+        "sos",
+        payload,
+        `sos-${Date.now()}`,
+      );
+    },
   };
 }

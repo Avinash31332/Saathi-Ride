@@ -1,136 +1,143 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
+import { useRef } from "react";
+
 import { supabase } from "../services/supabase";
+
 import { useEventService } from "../services/event.service";
 
-export default function RealtimeListener() {
-  const { showRideCompletion, showRideCompleted } = useEventService();
+import { createRideRealtime } from "../services/realtime/rideRealtime";
+import { createBookingRealtime } from "../services/realtime/bookingRealtime";
 
-  const handledEvents = useRef(new Set<string>());
+export default function RealtimeListener() {
+  const handledDropRequests = useRef(new Set<string>());
+  const {
+    showRideCompletion,
+    showRideCompleted,
+    showPassengerDropRequest,
+    showPassengerDropReason,
+  } = useEventService();
 
   useEffect(() => {
-    let channel: any = null;
+    let rideChannel: any = null;
+    let bookingChannel: any = null;
 
     const startRealtime = async (userId: string) => {
-      if (channel) {
-        await supabase.removeChannel(channel);
+      //---------------------------------------------
+      // Remove previous channels
+      //---------------------------------------------
+
+      if (rideChannel) {
+        await supabase.removeChannel(rideChannel);
+      }
+
+      if (bookingChannel) {
+        await supabase.removeChannel(bookingChannel);
       }
 
       console.log("Starting realtime for:", userId);
 
-      channel = supabase
-        .channel(`ride-events-${userId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "rides",
-          },
-          async (payload) => {
-            console.log("========== UPDATE RECEIVED ==========");
+      //---------------------------------------------
+      // Ride realtime
+      //---------------------------------------------
 
-            const ride = payload.new as any;
+      rideChannel = createRideRealtime(userId, {
+        onRideAwaitingConfirmation: async (ride) => {
+          // Driver shouldn't receive passenger confirmation popup
+          if (ride.driver_id === userId) return;
 
-            console.log("Ride Status:", ride.ride_status);
+          const { data: booking } = await supabase
+            .from("bookings")
+            .select("*")
+            .eq("ride_id", ride.id)
+            .eq("passenger_id", userId)
+            .eq("booking_status", "confirmed")
+            .single();
 
-            //----------------------------------------------------
-            // DRIVER?
-            //----------------------------------------------------
+          if (!booking) return;
 
-            const isDriver = ride.driver_id === userId;
+          if (booking.ride_completion_confirmed) return;
+          if (booking.drop_request_pending) return;
+          showRideCompletion({
+            bookingId: booking.id,
 
-            //----------------------------------------------------
-            // WAITING FOR PASSENGER CONFIRMATION
-            //----------------------------------------------------
+            rideId: ride.id,
 
-            if (ride.ride_status === "awaiting_confirmation") {
-              // Driver doesn't need this popup
-              if (isDriver) return;
+            reviewerId: userId,
 
-              const { data: booking } = await supabase
-                .from("bookings")
-                .select("*")
-                .eq("ride_id", ride.id)
-                .eq("passenger_id", userId)
-                .eq("booking_status", "confirmed")
-                .single();
+            driverId: ride.driver_id,
 
-              if (!booking) return;
+            source: ride.source,
 
-              // Already confirmed
-              if (booking.ride_completion_confirmed) return;
+            destination: ride.destination,
 
-              const key = `${ride.id}-${booking.id}-awaiting`;
+            rideDate: ride.ride_date,
 
-              if (handledEvents.current.has(key)) return;
+            rideTime: ride.ride_time,
+          });
+        },
 
-              handledEvents.current.add(key);
+        onRideCompleted: (ride) => {
+          const isDriver = ride.driver_id === userId;
 
-              showRideCompletion({
-                bookingId: booking.id,
-
+          if (!isDriver) {
+            showRideCompleted(
+              {
                 rideId: ride.id,
-
-                driverId: ride.driver_id,
-
                 reviewerId: userId,
-
+                driverId: ride.driver_id,
                 source: ride.source,
-
                 destination: ride.destination,
-
                 rideDate: ride.ride_date,
-
                 rideTime: ride.ride_time,
-              });
+              },
+              false,
+            );
+          }
+        },
+      });
 
-              return;
-            }
+      //---------------------------------------------
+      // Booking realtime
+      //---------------------------------------------
 
-            //----------------------------------------------------
-            // RIDE COMPLETED
-            //----------------------------------------------------
+      bookingChannel = createBookingRealtime(userId, {
+        onDropRequest: async (booking) => {
+          const key = booking.id;
 
-            if (ride.ride_status === "completed") {
-              const key = `${ride.id}-completed-${userId}`;
+          if (handledDropRequests.current.has(key)) {
+            return;
+          }
 
-              if (handledEvents.current.has(key)) return;
+          handledDropRequests.current.add(key);
 
-              handledEvents.current.add(key);
+          const { data: ride } = await supabase
+            .from("rides")
+            .select("*")
+            .eq("id", booking.ride_id)
+            .single();
 
-              showRideCompleted(
-                {
-                  rideId: ride.id,
+          if (!ride) return;
 
-                  bookingId: null,
-
-                  reviewerId: userId,
-
-                  driverId: ride.driver_id,
-
-                  source: ride.source,
-
-                  destination: ride.destination,
-
-                  rideDate: ride.ride_date,
-
-                  rideTime: ride.ride_time,
-                },
-                isDriver,
-              );
-
-              return;
-            }
-          },
-        )
-        .subscribe((status) => {
-          console.log("Realtime:", status);
-        });
+          showPassengerDropRequest({
+            bookingId: booking.id,
+            rideId: ride.id,
+            reviewerId: userId,
+            driverId: ride.driver_id,
+            source: ride.source,
+            destination: ride.destination,
+            rideDate: ride.ride_date,
+            rideTime: ride.ride_time,
+          });
+        },
+        onDropResolved: (booking) => {
+          handledDropRequests.current.delete(booking.id);
+        },
+      });
     };
 
-    //----------------------------------------------------
-    // Existing Session
-    //----------------------------------------------------
+    //---------------------------------------------
+    // Existing session
+    //---------------------------------------------
 
     supabase.auth.getSession().then(({ data }) => {
       if (data.session?.user) {
@@ -138,25 +145,31 @@ export default function RealtimeListener() {
       }
     });
 
-    //----------------------------------------------------
-    // Login / Logout
-    //----------------------------------------------------
+    //---------------------------------------------
+    // Auth changes
+    //---------------------------------------------
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      handledEvents.current.clear();
-
       if (session?.user) {
         startRealtime(session.user.id);
       }
     });
 
+    //---------------------------------------------
+    // Cleanup
+    //---------------------------------------------
+
     return () => {
       subscription.unsubscribe();
 
-      if (channel) {
-        supabase.removeChannel(channel);
+      if (rideChannel) {
+        supabase.removeChannel(rideChannel);
+      }
+
+      if (bookingChannel) {
+        supabase.removeChannel(bookingChannel);
       }
     };
   }, []);

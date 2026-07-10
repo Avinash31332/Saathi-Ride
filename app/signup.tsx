@@ -1,15 +1,72 @@
-import { useState } from "react";
-import { View, Text, TextInput, Button, Alert } from "react-native";
-
+import { useEffect, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  Alert,
+  StyleSheet,
+  Animated,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from "react-native";
+import { Feather } from "@expo/vector-icons";
 import { signUp } from "../services/auth";
 import { router } from "expo-router";
+import {
+  colors,
+  spacing,
+  radius,
+  typography,
+  shadow,
+} from "../constants/theme";
 
-export default function HomeScreen() {
+export default function SignupScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const fade = useRef(new Animated.Value(0)).current;
+  const slide = useRef(new Animated.Value(16)).current;
+  const buttonScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slide, {
+        toValue: 0,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  const pressIn = () =>
+    Animated.spring(buttonScale, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 6,
+    }).start();
+  const pressOut = () =>
+    Animated.spring(buttonScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 6,
+    }).start();
 
   const handleSignup = async () => {
+    setLoading(true);
     const { error } = await signUp(email, password);
+    setLoading(false);
 
     if (error) {
       Alert.alert(error.message);
@@ -20,49 +77,186 @@ export default function HomeScreen() {
     router.replace("/(tabs)");
   };
 
+  const goToLogin = () => {
+    Animated.timing(fade, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => router.push("/login"));
+  };
+
   return (
-    <View
-      style={{
-        flex: 1,
-        justifyContent: "center",
-        padding: 20,
-        backgroundColor: "#fff",
-      }}
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <Text
-        style={{
-          fontSize: 28,
-          marginBottom: 20,
-          fontWeight: "bold",
-        }}
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        RideShare 🚗
-      </Text>
+        <Animated.View
+          style={{ opacity: fade, transform: [{ translateY: slide }] }}
+        >
+          <View style={styles.iconBadge}>
+            <Feather name="navigation" size={26} color={colors.primary} />
+          </View>
 
-      <TextInput
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        style={{
-          borderWidth: 1,
-          marginBottom: 12,
-          padding: 12,
-        }}
-      />
+          <View style={styles.header}>
+            <Text style={styles.title}>RideShare</Text>
+            <Text style={styles.subtitle}>
+              Create an account to start booking rides
+            </Text>
+          </View>
 
-      <TextInput
-        placeholder="Password"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-        style={{
-          borderWidth: 1,
-          marginBottom: 20,
-          padding: 12,
-        }}
-      />
+          <View style={styles.form}>
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Email</Text>
+              <View style={styles.inputWrapper}>
+                <Feather
+                  name="mail"
+                  size={18}
+                  color={colors.textMuted}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  placeholder="you@example.com"
+                  placeholderTextColor={colors.textMuted}
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  style={styles.input}
+                />
+              </View>
+            </View>
 
-      <Button title="Create Account" onPress={handleSignup} />
-    </View>
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.inputWrapper}>
+                <Feather
+                  name="lock"
+                  size={18}
+                  color={colors.textMuted}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  placeholder="••••••••"
+                  placeholderTextColor={colors.textMuted}
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                  style={styles.input}
+                />
+                <Pressable
+                  onPress={() => setShowPassword((v) => !v)}
+                  hitSlop={10}
+                >
+                  <Feather
+                    name={showPassword ? "eye-off" : "eye"}
+                    size={18}
+                    color={colors.textMuted}
+                  />
+                </Pressable>
+              </View>
+            </View>
+
+            <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+              <Pressable
+                style={styles.signupButton}
+                onPressIn={pressIn}
+                onPressOut={pressOut}
+                onPress={handleSignup}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color={colors.surface} />
+                ) : (
+                  <>
+                    <Text style={styles.signupButtonText}>Create Account</Text>
+                    <Feather
+                      name="arrow-right"
+                      size={18}
+                      color={colors.surface}
+                      style={{ marginLeft: spacing.sm }}
+                    />
+                  </>
+                )}
+              </Pressable>
+            </Animated.View>
+
+            <Pressable onPress={goToLogin} style={styles.switchRow} hitSlop={8}>
+              <Text style={styles.switchText}>Already have an account? </Text>
+              <Text style={styles.switchLink}>Log In</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1, backgroundColor: colors.surfaceMuted },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
+  },
+  iconBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.lg,
+    backgroundColor: colors.primaryLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.lg,
+  },
+  header: { marginBottom: spacing.xl },
+  title: { ...typography.title, fontSize: 28, marginBottom: spacing.xs },
+  subtitle: { ...typography.subtitle, lineHeight: 21 },
+  form: { width: "100%" },
+  fieldGroup: { marginBottom: spacing.md + spacing.xs },
+  label: { ...typography.label, marginBottom: spacing.sm },
+  inputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    ...shadow.card,
+  },
+  inputIcon: { marginRight: spacing.sm },
+  input: {
+    flex: 1,
+    paddingVertical: 15,
+    fontSize: 16,
+    color: colors.textPrimary,
+  },
+  signupButton: {
+    flexDirection: "row",
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: spacing.sm,
+    ...shadow.card,
+  },
+  signupButtonText: {
+    color: colors.surface,
+    fontSize: 16,
+    fontWeight: "600",
+    letterSpacing: 0.3,
+  },
+  switchRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: spacing.lg,
+  },
+  switchText: { fontSize: 14, color: colors.textSecondary },
+  switchLink: { fontSize: 14, fontWeight: "700", color: colors.primary },
+});

@@ -1,13 +1,7 @@
-import {
-  useContext,
-} from "react";
+import { useContext } from "react";
 
-import {
-  GlobalEventContext,
-} from "../contexts/GlobalEventContext";
+import { GlobalEventContext } from "../contexts/GlobalEventContext";
 
 export default function useGlobalEvents() {
-  return useContext(
-    GlobalEventContext
-  );
+  return useContext(GlobalEventContext);
 }

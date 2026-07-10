@@ -1,4 +1,11 @@
-import { View, Text, ActivityIndicator, ScrollView } from "react-native";
+import {
+  View,
+  Text,
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
@@ -7,6 +14,7 @@ import {
   getDriverProfile,
   getDriverVehicles,
 } from "../../services/driver.service";
+import { colors, spacing, radius, typography } from "../../constants/theme";
 
 export default function DriverProfile() {
   const { id } = useLocalSearchParams();
@@ -36,87 +44,296 @@ export default function DriverProfile() {
   };
 
   if (loading) {
-    return <ActivityIndicator />;
-  }
-
-  if (!profile) {
     return (
-      <View
-        style={{
-          flex: 1,
-          justifyContent: "center",
-          alignItems: "center",
-        }}
-      >
-        <Text>Driver not found</Text>
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
+  if (!profile) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons
+          name="person-remove-outline"
+          size={40}
+          color={colors.textMuted}
+        />
+        <Text style={styles.emptyText}>Driver not found</Text>
+      </View>
+    );
+  }
+
+  const verificationStyle = () => {
+    const status = (profile.verification_status || "").toLowerCase();
+    if (status === "verified") {
+      return {
+        bg: colors.successLight,
+        color: colors.success,
+        icon: "shield-checkmark" as const,
+      };
+    }
+    if (status === "pending") {
+      return {
+        bg: "#FFFBEB",
+        color: colors.warning,
+        icon: "time" as const,
+      };
+    }
+    return {
+      bg: colors.surfaceMuted,
+      color: colors.textSecondary,
+      icon: "shield-outline" as const,
+    };
+  };
+
+  const verification = verificationStyle();
+
   return (
-    <ScrollView
-      contentContainerStyle={{
-        padding: 20,
-      }}
-    >
-      <Text
-        style={{
-          fontSize: 26,
-          fontWeight: "bold",
-          marginBottom: 15,
-        }}
-      >
-        Driver Profile
-      </Text>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <View style={styles.headerCard}>
+        <View style={styles.avatarCircle}>
+          <Ionicons name="person" size={32} color={colors.primary} />
+        </View>
 
-      <Text>Name: {profile.full_name || "Not Provided"}</Text>
+        <Text style={styles.name}>{profile.full_name || "Not Provided"}</Text>
+        <Text style={styles.phone}>{profile.phone || "Not Provided"}</Text>
 
-      <Text>Phone: {profile.phone || "Not Provided"}</Text>
+        <View
+          style={[
+            styles.verificationBadge,
+            { backgroundColor: verification.bg },
+          ]}
+        >
+          <Ionicons
+            name={verification.icon}
+            size={14}
+            color={verification.color}
+          />
+          <Text
+            style={[styles.verificationText, { color: verification.color }]}
+          >
+            {profile.verification_status || "Not Verified"}
+          </Text>
+        </View>
+      </View>
 
-      <Text>⭐ Rating: {Number(profile.rating || 0).toFixed(1)}</Text>
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Ionicons name="star" size={18} color={colors.warning} />
+          <Text style={styles.statValue}>
+            {Number(profile.rating || 0).toFixed(1)}
+          </Text>
+          <Text style={styles.statLabel}>Rating</Text>
+        </View>
 
-      <Text>Reviews: {profile.total_reviews || 0}</Text>
+        <View style={styles.statCard}>
+          <Ionicons
+            name="chatbubble-ellipses-outline"
+            size={18}
+            color={colors.primary}
+          />
+          <Text style={styles.statValue}>{profile.total_reviews || 0}</Text>
+          <Text style={styles.statLabel}>Reviews</Text>
+        </View>
 
-      <Text>Completed Rides: {profile.total_rides || 0}</Text>
+        <View style={styles.statCard}>
+          <Ionicons
+            name="checkmark-done-outline"
+            size={18}
+            color={colors.success}
+          />
+          <Text style={styles.statValue}>{profile.total_rides || 0}</Text>
+          <Text style={styles.statLabel}>Rides</Text>
+        </View>
+      </View>
 
-      <Text>
-        Verification Status: {profile.verification_status || "Not Verified"}
-      </Text>
-
-      <Text
-        style={{
-          marginTop: 25,
-          marginBottom: 10,
-          fontSize: 18,
-          fontWeight: "bold",
-        }}
-      >
-        Vehicles
-      </Text>
+      <Text style={styles.sectionTitle}>Vehicles</Text>
 
       {vehicles.length === 0 ? (
-        <Text>No vehicles added</Text>
+        <View style={styles.emptyVehicles}>
+          <Ionicons name="car-outline" size={28} color={colors.textMuted} />
+          <Text style={styles.emptyText}>No vehicles added</Text>
+        </View>
       ) : (
         vehicles.map((vehicle) => (
-          <View
-            key={vehicle.id}
-            style={{
-              borderWidth: 1,
-              padding: 12,
-              borderRadius: 10,
-              marginBottom: 10,
-            }}
-          >
-            <Text>{vehicle.vehicle_name}</Text>
+          <View key={vehicle.id} style={styles.vehicleCard}>
+            <View style={styles.vehicleHeader}>
+              <Ionicons
+                name="car-sport-outline"
+                size={20}
+                color={colors.primary}
+              />
+              <Text style={styles.vehicleName}>{vehicle.vehicle_name}</Text>
+            </View>
 
-            <Text>{vehicle.vehicle_number}</Text>
+            <View style={styles.vehicleMetaRow}>
+              <View style={styles.metaItem}>
+                <Ionicons
+                  name="pricetag-outline"
+                  size={14}
+                  color={colors.textSecondary}
+                />
+                <Text style={styles.metaText}>{vehicle.vehicle_number}</Text>
+              </View>
 
-            <Text>Seats: {vehicle.total_seats}</Text>
+              <View style={styles.metaItem}>
+                <Ionicons
+                  name="people-outline"
+                  size={14}
+                  color={colors.textSecondary}
+                />
+                <Text style={styles.metaText}>{vehicle.total_seats} seats</Text>
+              </View>
 
-            <Text>Color: {vehicle.vehicle_color}</Text>
+              <View style={styles.metaItem}>
+                <Ionicons
+                  name="color-palette-outline"
+                  size={14}
+                  color={colors.textSecondary}
+                />
+                <Text style={styles.metaText}>{vehicle.vehicle_color}</Text>
+              </View>
+            </View>
           </View>
         ))
       )}
     </ScrollView>
   );
 }
+
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.surfaceMuted,
+  },
+  content: {
+    padding: spacing.md,
+    paddingBottom: spacing.xl,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.lg,
+  },
+  emptyText: {
+    marginTop: spacing.sm,
+    color: colors.textMuted,
+    fontSize: 14,
+  },
+  headerCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  avatarCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.primaryLight,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: spacing.sm,
+  },
+  name: {
+    ...typography.title,
+    fontSize: 20,
+  },
+  phone: {
+    ...typography.subtitle,
+    marginTop: 2,
+    marginBottom: spacing.sm,
+  },
+  verificationBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 5,
+    borderRadius: radius.full,
+  },
+  verificationText: {
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "capitalize",
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    paddingVertical: spacing.md,
+    gap: 2,
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginTop: 2,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.textPrimary,
+    marginBottom: spacing.sm,
+  },
+  emptyVehicles: {
+    alignItems: "center",
+    padding: spacing.lg,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  vehicleCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  vehicleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  vehicleName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textPrimary,
+  },
+  vehicleMetaRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    flexWrap: "wrap",
+  },
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  metaText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+});

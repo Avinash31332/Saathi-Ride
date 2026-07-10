@@ -1,25 +1,72 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
+  Pressable,
   Alert,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Animated,
+  ActivityIndicator,
 } from "react-native";
-
+import { Feather } from "@expo/vector-icons";
 import { signIn } from "../services/auth";
 import { router } from "expo-router";
+import {
+  colors,
+  spacing,
+  radius,
+  typography,
+  shadow,
+} from "../constants/theme";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const fade = useRef(new Animated.Value(0)).current;
+  const slide = useRef(new Animated.Value(16)).current;
+  const buttonScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slide, {
+        toValue: 0,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  const pressIn = () =>
+    Animated.spring(buttonScale, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 6,
+    }).start();
+  const pressOut = () =>
+    Animated.spring(buttonScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 6,
+    }).start();
 
   const handleLogin = async () => {
+    setLoading(true);
     const { error } = await signIn(email, password);
+    setLoading(false);
 
     if (error) {
       Alert.alert(error.message);
@@ -27,6 +74,14 @@ export default function LoginScreen() {
     }
 
     router.replace("/(tabs)");
+  };
+
+  const goToSignup = () => {
+    Animated.timing(fade, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => router.push("/signup"));
   };
 
   return (
@@ -39,113 +94,172 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          <Text style={styles.title}>Welcome back</Text>
-          <Text style={styles.subtitle}>
-            Sign in to continue to your account
-          </Text>
-        </View>
-
-        <View style={styles.form}>
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              placeholder="you@example.com"
-              placeholderTextColor="#a3aab0"
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              style={styles.input}
-            />
+        <Animated.View
+          style={{ opacity: fade, transform: [{ translateY: slide }] }}
+        >
+          <View style={styles.iconBadge}>
+            <Feather name="log-in" size={26} color={colors.primary} />
           </View>
 
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Password</Text>
-            <TextInput
-              placeholder="••••••••"
-              placeholderTextColor="#a3aab0"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-              style={styles.input}
-            />
+          <View style={styles.header}>
+            <Text style={styles.title}>Welcome back</Text>
+            <Text style={styles.subtitle}>
+              Sign in to continue to your account
+            </Text>
           </View>
 
-          <TouchableOpacity
-            style={styles.loginButton}
-            activeOpacity={0.85}
-            onPress={handleLogin}
-          >
-            <Text style={styles.loginButtonText}>Log In</Text>
-          </TouchableOpacity>
-        </View>
+          <View style={styles.form}>
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Email</Text>
+              <View style={styles.inputWrapper}>
+                <Feather
+                  name="mail"
+                  size={18}
+                  color={colors.textMuted}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  placeholder="you@example.com"
+                  placeholderTextColor={colors.textMuted}
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  style={styles.input}
+                />
+              </View>
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.inputWrapper}>
+                <Feather
+                  name="lock"
+                  size={18}
+                  color={colors.textMuted}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  placeholder="••••••••"
+                  placeholderTextColor={colors.textMuted}
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                  style={styles.input}
+                />
+                <Pressable
+                  onPress={() => setShowPassword((v) => !v)}
+                  hitSlop={10}
+                >
+                  <Feather
+                    name={showPassword ? "eye-off" : "eye"}
+                    size={18}
+                    color={colors.textMuted}
+                  />
+                </Pressable>
+              </View>
+            </View>
+
+            <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+              <Pressable
+                style={styles.loginButton}
+                onPressIn={pressIn}
+                onPressOut={pressOut}
+                onPress={handleLogin}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color={colors.surface} />
+                ) : (
+                  <>
+                    <Text style={styles.loginButtonText}>Log In</Text>
+                    <Feather
+                      name="arrow-right"
+                      size={18}
+                      color={colors.surface}
+                      style={{ marginLeft: spacing.sm }}
+                    />
+                  </>
+                )}
+              </Pressable>
+            </Animated.View>
+
+            <Pressable
+              onPress={goToSignup}
+              style={styles.switchRow}
+              hitSlop={8}
+            >
+              <Text style={styles.switchText}>Do not have an account? </Text>
+              <Text style={styles.switchLink}>Sign Up</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-    backgroundColor: "#fafaf8",
-  },
+  flex: { flex: 1, backgroundColor: colors.surfaceMuted },
   scrollContent: {
     flexGrow: 1,
     justifyContent: "center",
-    paddingHorizontal: 28,
-    paddingVertical: 40,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
   },
-  header: {
-    marginBottom: 40,
+  iconBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: radius.lg,
+    backgroundColor: colors.primaryLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.lg,
   },
-  title: {
-    fontSize: 30,
-    fontWeight: "700",
-    color: "#2b2b2b",
-    marginBottom: 8,
-    letterSpacing: 0.2,
-  },
-  subtitle: {
-    fontSize: 15,
-    color: "#8a8f93",
-    lineHeight: 21,
-  },
-  form: {
-    width: "100%",
-  },
-  fieldGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#5c6066",
-    marginBottom: 8,
-    letterSpacing: 0.2,
-  },
-  input: {
+  header: { marginBottom: spacing.xl },
+  title: { ...typography.title, fontSize: 28, marginBottom: spacing.xs },
+  subtitle: { ...typography.subtitle, lineHeight: 21 },
+  form: { width: "100%" },
+  fieldGroup: { marginBottom: spacing.md + spacing.xs },
+  label: { ...typography.label, marginBottom: spacing.sm },
+  inputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: "#e4e2dd",
-    backgroundColor: "#ffffff",
-    borderRadius: 14,
-    paddingHorizontal: 16,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    ...shadow.card,
+  },
+  inputIcon: { marginRight: spacing.sm },
+  input: {
+    flex: 1,
     paddingVertical: 15,
     fontSize: 16,
-    color: "#2b2b2b",
+    color: colors.textPrimary,
   },
   loginButton: {
-    backgroundColor: "#4a6b5a",
-    borderRadius: 14,
+    flexDirection: "row",
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
     paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 12,
+    marginTop: spacing.sm,
+    ...shadow.card,
   },
   loginButtonText: {
-    color: "#ffffff",
+    color: colors.surface,
     fontSize: 16,
     fontWeight: "600",
     letterSpacing: 0.3,
   },
+  switchRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: spacing.lg,
+  },
+  switchText: { fontSize: 14, color: colors.textSecondary },
+  switchLink: { fontSize: 14, fontWeight: "700", color: colors.primary },
 });
