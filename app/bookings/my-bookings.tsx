@@ -1,48 +1,60 @@
+import { Feather, Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  FlatList,
-  View,
-  Text,
   ActivityIndicator,
-  Pressable,
   Alert,
-  StyleSheet,
   Animated,
+  FlatList,
+  Pressable,
   RefreshControl,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
-import { Feather } from "@expo/vector-icons";
 
-import { router } from "expo-router";
-
-import { supabase } from "../../services/supabase";
 import {
-  getMyBookings,
   cancelBooking,
   confirmRideCompletion,
+  getMyBookings,
 } from "../../services/booking.service";
+
+import { supabase } from "../../services/supabase";
+
 import {
   colors,
-  spacing,
   radius,
-  typography,
   shadow,
+  spacing,
+  typography,
 } from "../../constants/theme";
 
 const STATUS_STYLES: Record<
   string,
-  { bg: string; text: string; label: string }
+  {
+    bg: string;
+    text: string;
+    label: string;
+  }
 > = {
   confirmed: {
     bg: colors.primaryLight,
     text: colors.primary,
     label: "Confirmed",
   },
-  pending: { bg: "#FEF3C7", text: colors.warning, label: "Pending" },
+
+  pending: {
+    bg: "#FEF3C7",
+    text: colors.warning,
+    label: "Pending",
+  },
+
   cancelled: {
     bg: colors.dangerLight,
     text: colors.danger,
     label: "Cancelled",
   },
+
   completed: {
     bg: colors.successLight,
     text: colors.success,
@@ -51,14 +63,31 @@ const STATUS_STYLES: Record<
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const s = STATUS_STYLES[status] ?? {
+  const statusStyle = STATUS_STYLES[status] ?? {
     bg: colors.surfaceMuted,
     text: colors.textSecondary,
     label: status,
   };
+
   return (
-    <View style={[styles.badge, { backgroundColor: s.bg }]}>
-      <Text style={[styles.badgeText, { color: s.text }]}>{s.label}</Text>
+    <View
+      style={[
+        styles.badge,
+        {
+          backgroundColor: statusStyle.bg,
+        },
+      ]}
+    >
+      <Text
+        style={[
+          styles.badgeText,
+          {
+            color: statusStyle.text,
+          },
+        ]}
+      >
+        {statusStyle.label}
+      </Text>
     </View>
   );
 }
@@ -75,7 +104,9 @@ function BookingCard({
   onConfirm: (id: string) => void;
 }) {
   const fade = useRef(new Animated.Value(0)).current;
+
   const slide = useRef(new Animated.Value(12)).current;
+
   const scale = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -86,6 +117,7 @@ function BookingCard({
         delay: index * 60,
         useNativeDriver: true,
       }),
+
       Animated.timing(slide, {
         toValue: 0,
         duration: 350,
@@ -93,37 +125,62 @@ function BookingCard({
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fade, index, slide]);
 
-  const pressIn = () =>
+  const pressIn = () => {
     Animated.spring(scale, {
       toValue: 0.98,
       useNativeDriver: true,
       speed: 40,
       bounciness: 6,
     }).start();
-  const pressOut = () =>
+  };
+
+  const pressOut = () => {
     Animated.spring(scale, {
       toValue: 1,
       useNativeDriver: true,
       speed: 40,
       bounciness: 6,
     }).start();
+  };
+
+  const ride = item.rides;
 
   const showConfirmButton =
-    item.rides.ride_status === "awaiting_confirmation" &&
+    ride?.ride_status === "awaiting_confirmation" &&
     item.booking_status === "confirmed" &&
     !item.ride_completion_confirmed;
 
-  const showCancelButton = item.booking_status !== "cancelled";
-  const showReviewButton = item.rides.ride_status === "completed";
+  const showCancelButton =
+    item.booking_status !== "cancelled" && ride?.ride_status !== "completed";
+
+  const showReviewButton = ride?.ride_status === "completed";
+
+  const showSafetyButton =
+    item.booking_status === "confirmed" && ride?.ride_status !== "completed";
+
+  const hasActions = showConfirmButton || showCancelButton || showReviewButton;
 
   return (
     <Animated.View
-      style={{ opacity: fade, transform: [{ translateY: slide }, { scale }] }}
+      style={{
+        opacity: fade,
+
+        transform: [
+          {
+            translateY: slide,
+          },
+          {
+            scale,
+          },
+        ],
+      }}
     >
       <Pressable
-        onPress={() => router.push(`/rides/${item.ride_id}`)}
+        onPress={() => {
+          router.push(`/rides/${item.ride_id}`);
+        }}
         onPressIn={pressIn}
         onPressOut={pressOut}
       >
@@ -131,40 +188,92 @@ function BookingCard({
           <View style={styles.cardHeader}>
             <View style={styles.routeRow}>
               <Feather name="map-pin" size={16} color={colors.primary} />
+
               <Text style={styles.routeText} numberOfLines={1}>
-                {item.rides.source} → {item.rides.destination}
+                {ride?.source} → {ride?.destination}
               </Text>
             </View>
+
             <StatusBadge status={item.booking_status} />
           </View>
 
           <View style={styles.detailsRow}>
             <View style={styles.detailItem}>
               <Feather name="calendar" size={14} color={colors.textMuted} />
-              <Text style={styles.detailText}>{item.rides.ride_date}</Text>
+
+              <Text style={styles.detailText}>{ride?.ride_date}</Text>
             </View>
+
             <View style={styles.detailItem}>
               <Feather name="clock" size={14} color={colors.textMuted} />
-              <Text style={styles.detailText}>{item.rides.ride_time}</Text>
+
+              <Text style={styles.detailText}>{ride?.ride_time}</Text>
             </View>
+
             <View style={styles.detailItem}>
               <Feather name="tag" size={14} color={colors.textMuted} />
-              <Text style={styles.detailText}>₹{item.rides.price}</Text>
+
+              <Text style={styles.detailText}>₹{ride?.price}</Text>
             </View>
           </View>
 
-          {(showConfirmButton || showCancelButton || showReviewButton) && (
+          {showSafetyButton && (
+            <Pressable
+              onPress={(event) => {
+                event.stopPropagation();
+
+                router.push({
+                  pathname: "/safety/[bookingId]",
+                  params: {
+                    bookingId: item.id,
+                  },
+                });
+              }}
+              style={({ pressed }) => [
+                styles.safetyButton,
+
+                pressed && {
+                  transform: [
+                    {
+                      scale: 0.97,
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={styles.safetyIcon}>
+                <Ionicons name="shield-checkmark" size={19} color="#BE185D" />
+              </View>
+
+              <View style={styles.safetyContent}>
+                <Text style={styles.safetyButtonText}>Saathi Safety Mode</Text>
+
+                <Text style={styles.safetyButtonSubtitle}>
+                  Safety monitoring for this ride
+                </Text>
+              </View>
+
+              <Ionicons name="chevron-forward" size={19} color="#FFFFFF" />
+            </Pressable>
+          )}
+
+          {hasActions && (
             <View style={styles.actionsRow}>
               {showConfirmButton && (
                 <Pressable
                   style={[styles.actionButton, styles.primaryAction]}
-                  onPress={() => onConfirm(item.id)}
+                  onPress={(event) => {
+                    event.stopPropagation();
+
+                    onConfirm(item.id);
+                  }}
                 >
                   <Feather
                     name="check-circle"
                     size={15}
                     color={colors.surface}
                   />
+
                   <Text style={styles.primaryActionText}>
                     Confirm Completed
                   </Text>
@@ -174,17 +283,20 @@ function BookingCard({
               {showReviewButton && (
                 <Pressable
                   style={[styles.actionButton, styles.secondaryAction]}
-                  onPress={() =>
+                  onPress={(event) => {
+                    event.stopPropagation();
+
                     router.push({
                       pathname: "/bookings/review",
                       params: {
-                        rideId: item.rides.id,
-                        driverId: item.rides.driver_id,
+                        rideId: ride.id,
+                        driverId: ride.driver_id,
                       },
-                    })
-                  }
+                    });
+                  }}
                 >
                   <Feather name="star" size={15} color={colors.primary} />
+
                   <Text style={styles.secondaryActionText}>Review Driver</Text>
                 </Pressable>
               )}
@@ -192,9 +304,14 @@ function BookingCard({
               {showCancelButton && (
                 <Pressable
                   style={[styles.actionButton, styles.dangerAction]}
-                  onPress={() => onCancel(item.id)}
+                  onPress={(event) => {
+                    event.stopPropagation();
+
+                    onCancel(item.id);
+                  }}
                 >
                   <Feather name="x-circle" size={15} color={colors.danger} />
+
                   <Text style={styles.dangerActionText}>Cancel</Text>
                 </Pressable>
               )}
@@ -208,7 +325,9 @@ function BookingCard({
 
 export default function MyBookingsScreen() {
   const [bookings, setBookings] = useState<any[]>([]);
+
   const [loading, setLoading] = useState(true);
+
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -220,52 +339,77 @@ export default function MyBookingsScreen() {
       data: { user },
     } = await supabase.auth.getUser();
 
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
 
-    const { data } = await getMyBookings(user.id);
+      return;
+    }
+
+    const { data, error } = await getMyBookings(user.id);
+
+    if (error) {
+      console.log("LOAD BOOKINGS ERROR:", error);
+
+      setLoading(false);
+
+      return;
+    }
 
     setBookings(data || []);
+
     setLoading(false);
   };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+
     await loadBookings();
+
     setRefreshing(false);
   }, []);
 
   const handleCancelBooking = async (bookingId: string) => {
-    Alert.alert("Cancel Booking", "Are you sure?", [
-      {
-        text: "No",
-      },
-      {
-        text: "Yes",
-        onPress: async () => {
-          const { error } = await cancelBooking(bookingId);
-
-          if (error) {
-            Alert.alert(error.message);
-            return;
-          }
-
-          loadBookings();
+    Alert.alert(
+      "Cancel Booking",
+      "Are you sure you want to cancel this booking?",
+      [
+        {
+          text: "No",
+          style: "cancel",
         },
-      },
-    ]);
+
+        {
+          text: "Yes",
+          style: "destructive",
+
+          onPress: async () => {
+            const { error } = await cancelBooking(bookingId);
+
+            if (error) {
+              Alert.alert("Unable to cancel booking", error.message);
+
+              return;
+            }
+
+            await loadBookings();
+          },
+        },
+      ],
+    );
   };
 
   const handleConfirmRide = async (bookingId: string) => {
     const { error } = await confirmRideCompletion(bookingId);
 
     if (error) {
-      Alert.alert(error.message);
+      Alert.alert("Unable to confirm ride", error.message);
+
       return;
     }
 
-    Alert.alert("Ride confirmed");
+    Alert.alert("Ride confirmed", "You confirmed that the ride was completed.");
 
-    loadBookings();
+    await loadBookings();
   };
 
   if (loading) {
@@ -282,7 +426,9 @@ export default function MyBookingsScreen() {
         <View style={styles.emptyIconBadge}>
           <Feather name="calendar" size={26} color={colors.textMuted} />
         </View>
+
         <Text style={styles.emptyTitle}>No bookings yet</Text>
+
         <Text style={styles.emptySubtitle}>
           Your ride bookings will show up here
         </Text>
@@ -295,11 +441,13 @@ export default function MyBookingsScreen() {
       data={bookings}
       keyExtractor={(item) => item.id}
       contentContainerStyle={styles.listContent}
+      showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
           tintColor={colors.primary}
+          colors={[colors.primary]}
         />
       }
       renderItem={({ item, index }) => (
@@ -317,8 +465,10 @@ export default function MyBookingsScreen() {
 const styles = StyleSheet.create({
   listContent: {
     padding: spacing.md,
+    paddingBottom: spacing.xl,
     backgroundColor: colors.surfaceMuted,
   },
+
   centered: {
     flex: 1,
     alignItems: "center",
@@ -326,6 +476,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     paddingHorizontal: spacing.xl,
   },
+
   emptyIconBadge: {
     width: 56,
     height: 56,
@@ -336,15 +487,18 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     ...shadow.card,
   },
+
   emptyTitle: {
     ...typography.title,
     fontSize: 18,
     marginBottom: spacing.xs,
   },
+
   emptySubtitle: {
     ...typography.subtitle,
     textAlign: "center",
   },
+
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
@@ -352,57 +506,104 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     ...shadow.card,
   },
+
   cardHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: spacing.sm,
   },
+
   routeRow: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
     marginRight: spacing.sm,
   },
+
   routeText: {
     ...typography.body,
     fontWeight: "600",
     marginLeft: spacing.xs,
     flexShrink: 1,
   },
+
   badge: {
     paddingHorizontal: spacing.sm,
     paddingVertical: 4,
     borderRadius: radius.full,
   },
+
   badgeText: {
     fontSize: 12,
     fontWeight: "700",
   },
+
   detailsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.md,
     marginBottom: spacing.sm,
   },
+
   detailItem: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
   },
+
   detailText: {
     fontSize: 13,
     color: colors.textSecondary,
   },
+
+  safetyButton: {
+    minHeight: 58,
+    backgroundColor: "#BE185D",
+    borderRadius: radius.md,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.sm,
+  },
+
+  safetyIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#FCE7F3",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
+  },
+
+  safetyContent: {
+    flex: 1,
+  },
+
+  safetyButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+
+  safetyButtonSubtitle: {
+    color: "#FCE7F3",
+    fontSize: 11,
+    marginTop: 2,
+  },
+
   actionsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
     paddingTop: spacing.sm,
   },
+
   actionButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -411,25 +612,31 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: radius.sm,
   },
+
   primaryAction: {
     backgroundColor: colors.primary,
   },
+
   primaryActionText: {
     color: colors.surface,
     fontSize: 13,
     fontWeight: "600",
   },
+
   secondaryAction: {
     backgroundColor: colors.primaryLight,
   },
+
   secondaryActionText: {
     color: colors.primary,
     fontSize: 13,
     fontWeight: "600",
   },
+
   dangerAction: {
     backgroundColor: colors.dangerLight,
   },
+
   dangerActionText: {
     color: colors.danger,
     fontSize: 13,
