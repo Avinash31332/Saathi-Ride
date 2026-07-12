@@ -1,92 +1,55 @@
 import { supabase } from "./supabase";
-import { getAvailableSeats } from "./seat.service";
 
 export async function bookRide(
   rideId: string,
   passengerId: string,
-  seatsBooked: number
+  seatsBooked: number,
 ) {
-  const { data: ride } = await supabase
-    .from("rides")
-    .select("*")
-    .eq("id", rideId)
-    .single();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
-  if (!ride) {
+  if (userError || !user) {
     return {
-      error: {
-        message: "Ride not found",
+      data: null,
+      error: userError || {
+        message: "Not authenticated",
       },
     };
   }
 
-  const availableSeats =
-  await getAvailableSeats(rideId);
-
-if (
-  availableSeats < seatsBooked
-) {
-  return {
-    error: {
-      message:
-        "Not enough seats available",
-    },
-  };
-}
-
-  const { data: existingBooking } =
-    await supabase
-      .from("bookings")
-      .select("*")
-      .eq("ride_id", rideId)
-      .eq("passenger_id", passengerId)
-      .eq("booking_status", "confirmed")
-      .single();
-
-  if (existingBooking) {
+  if (user.id !== passengerId) {
     return {
+      data: null,
       error: {
-        message: "Already booked",
+        message: "Invalid passenger",
       },
     };
   }
 
-  const bookingResult = await supabase
-    .from("bookings")
-    .insert([
-      {
-        ride_id: rideId,
-        passenger_id: passengerId,
-        seats_booked: seatsBooked,
-        booking_status: "confirmed",
-      },
-    ]);
-
-  if (bookingResult.error)
-    return bookingResult;
-
-
-  return bookingResult;
-}
-
-export async function getMyBookings(
-  userId: string
-) {
-  return await supabase
-  .from("bookings")
-  .select(`
-    *,
-    rides (*)
-  `)
-  .eq("passenger_id", userId)
-  .order("created_at", {
-    ascending: false,
+  return await supabase.rpc("book_ride", {
+    p_ride_id: rideId,
+    p_seats_booked: seatsBooked,
   });
 }
 
-export async function cancelBooking(
-  bookingId: string
-) {
+export async function getMyBookings(userId: string) {
+  return await supabase
+    .from("bookings")
+    .select(
+      `
+    *,
+    rides (*)
+  `,
+    )
+    .eq("passenger_id", userId)
+    .order("created_at", {
+      ascending: false,
+    });
+}
+
+export async function cancelBooking(bookingId: string) {
   const result = await supabase
     .from("bookings")
     .update({
@@ -216,41 +179,29 @@ export async function cancelBooking(
 //   }
 // }
 
-export async function confirmRideCompletion(
-  bookingId: string
-) {
-  return await supabase.rpc(
-    "confirm_ride_completion",
-    {
-      booking_id: bookingId,
-    }
-  );
+export async function confirmRideCompletion(bookingId: string) {
+  return await supabase.rpc("confirm_ride_completion", {
+    booking_id: bookingId,
+  });
 }
-
 
 export async function hasPassengerConfirmed(
   rideId: string,
-  passengerId: string
+  passengerId: string,
 ) {
   return await supabase
-    .from(
-      "ride_completion_confirmations"
-    )
+    .from("ride_completion_confirmations")
     .select("*")
     .eq("ride_id", rideId)
-    .eq(
-      "passenger_id",
-      passengerId
-    )
+    .eq("passenger_id", passengerId)
     .single();
 }
 
-export async function getPendingRideConfirmation(
-  passengerId: string
-) {
+export async function getPendingRideConfirmation(passengerId: string) {
   return await supabase
     .from("bookings")
-    .select(`
+    .select(
+      `
       *,
       rides (
         *,
@@ -258,46 +209,31 @@ export async function getPendingRideConfirmation(
           full_name
         )
       )
-    `)
+    `,
+    )
     .eq("passenger_id", passengerId)
     .eq("booking_status", "confirmed")
     .eq("ride_completion_confirmed", false)
-    .eq("rides.ride_status","awaiting_confirmation");
+    .eq("rides.ride_status", "awaiting_confirmation");
 }
 
-export async function requestPassengerDrop(
-  bookingId: string
-) {
-  return await supabase.rpc(
-    "request_passenger_drop",
-    {
-      booking_id: bookingId,
-    }
-  );
+export async function requestPassengerDrop(bookingId: string) {
+  return await supabase.rpc("request_passenger_drop", {
+    booking_id: bookingId,
+  });
 }
 
-export async function confirmPassengerDrop(
-  bookingId: string,
-  reason: string
-) {
-  return await supabase.rpc(
-    "confirm_passenger_drop",
-    {
-      booking_id: bookingId,
-      drop_reason_value: reason,
-    }
-  );
+export async function confirmPassengerDrop(bookingId: string, reason: string) {
+  return await supabase.rpc("confirm_passenger_drop", {
+    booking_id: bookingId,
+    drop_reason_value: reason,
+  });
 }
 
-export async function declinePassengerDrop(
-  bookingId: string
-) {
-  return await supabase.rpc(
-    "decline_passenger_drop",
-    {
-      booking_id: bookingId,
-    }
-  );
+export async function declinePassengerDrop(bookingId: string) {
+  return await supabase.rpc("decline_passenger_drop", {
+    booking_id: bookingId,
+  });
 }
 
 // export async function finishRideIfNeeded(

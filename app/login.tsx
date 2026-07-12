@@ -1,27 +1,28 @@
+import { Feather } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  TextInput,
-  Pressable,
+  ActivityIndicator,
   Alert,
-  StyleSheet,
+  Animated,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
-  Animated,
-  ActivityIndicator,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
-import { Feather } from "@expo/vector-icons";
-import { signIn } from "../services/auth";
-import { router } from "expo-router";
 import {
   colors,
-  spacing,
   radius,
-  typography,
   shadow,
+  spacing,
+  typography,
 } from "../constants/theme";
+import { signIn } from "../services/auth";
+import { supabase } from "../services/supabase";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
@@ -73,7 +74,35 @@ export default function LoginScreen() {
       return;
     }
 
-    router.replace("/(tabs)");
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      Alert.alert("Login failed");
+
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("profile_completed")
+      .eq("id", user.id)
+      .single();
+
+    if (profileError) {
+      console.log("PROFILE CHECK ERROR:", profileError);
+
+      Alert.alert("Unable to load profile", profileError.message);
+
+      return;
+    }
+
+    if (profile?.profile_completed) {
+      router.replace("/(tabs)");
+    } else {
+      router.replace("/complete-profile");
+    }
   };
 
   const goToSignup = () => {

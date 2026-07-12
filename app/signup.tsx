@@ -1,27 +1,27 @@
+import { Feather } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  TextInput,
-  Pressable,
-  Alert,
-  StyleSheet,
-  Animated,
   ActivityIndicator,
+  Alert,
+  Animated,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
-import { Feather } from "@expo/vector-icons";
-import { signUp } from "../services/auth";
-import { router } from "expo-router";
 import {
   colors,
-  spacing,
   radius,
-  typography,
   shadow,
+  spacing,
+  typography,
 } from "../constants/theme";
+import { signUp } from "../services/auth";
 
 export default function SignupScreen() {
   const [email, setEmail] = useState("");
@@ -74,7 +74,7 @@ export default function SignupScreen() {
     }
 
     Alert.alert("Welcome to RideShare 🚗");
-    router.replace("/(tabs)");
+    router.replace("/complete-profile");
   };
 
   const goToLogin = () => {

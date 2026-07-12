@@ -1,17 +1,20 @@
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-  View,
-  Text,
-  FlatList,
   ActivityIndicator,
-  TouchableOpacity,
+  Alert,
+  FlatList,
   StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 
-import { supabase } from "../../services/supabase";
+import { startRideJourney } from "../../services/journey-tracking.service";
+
 import { getMyRides } from "../../services/ride.service";
-import { completeRide } from "../../services/driver.service";
+import { supabase } from "../../services/supabase";
 
 const colors = {
   primary: "#2563EB",
@@ -74,6 +77,72 @@ export default function MyRidesScreen() {
       }
     };
   }, []);
+
+  const startJourney = async (ride: any) => {
+    if (
+      ride.destination_lat == null ||
+      ride.destination_lng == null ||
+      ride.route_distance_km == null
+    ) {
+      Alert.alert(
+        "Route information missing",
+        "This ride does not contain the route data required for journey tracking.",
+      );
+
+      return;
+    }
+
+    Alert.alert(
+      "Start journey?",
+      "Journey Tracking will use your location while this ride is active.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Start Journey",
+          onPress: async () => {
+            try {
+              const mode = await startRideJourney(
+                ride.id,
+
+                Number(ride.destination_lat),
+
+                Number(ride.destination_lng),
+
+                Number(ride.route_distance_km),
+              );
+
+              await loadRides();
+
+              Alert.alert(
+                "Journey started",
+                mode === "safety"
+                  ? "Enhanced Safety Tracking is active because a female passenger is travelling on this ride."
+                  : "Journey Progress Tracking is active.",
+              );
+            } catch (error: any) {
+              Alert.alert(
+                "Unable to start journey",
+                error?.message || "Journey tracking could not be started.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const openActiveJourney = (ride: any) => {
+    router.push({
+      pathname: "/rides/journey/[rideId]" as any,
+
+      params: {
+        rideId: ride.id,
+      },
+    });
+  };
 
   const loadRides = async () => {
     const {
@@ -182,30 +251,26 @@ export default function MyRidesScreen() {
 
               {item.ride_status === "active" && (
                 <TouchableOpacity
-                  style={styles.completeButton}
+                  style={styles.startButton}
                   activeOpacity={0.85}
-                  onPress={async () => {
-                    try {
-                      console.log("Completing ride:", item.id);
-
-                      const result = await completeRide(item.id);
-
-                      console.log(result);
-
-                      // loadRides();
-                    } catch (e) {
-                      console.log("COMPLETE RIDE ERROR");
-                      console.log(e);
-                    }
-                  }}
+                  onPress={() => startJourney(item)}
                 >
-                  <Ionicons
-                    name="checkmark-circle-outline"
-                    size={16}
-                    color={colors.surface}
-                  />
-                  <Text style={styles.completeButtonText}>
-                    Mark Ride Complete
+                  <Ionicons name="navigate" size={17} color={colors.surface} />
+
+                  <Text style={styles.startButtonText}>Start Journey</Text>
+                </TouchableOpacity>
+              )}
+
+              {item.ride_status === "in_progress" && (
+                <TouchableOpacity
+                  style={styles.trackingButton}
+                  activeOpacity={0.85}
+                  onPress={() => openActiveJourney(item)}
+                >
+                  <Ionicons name="radio" size={17} color={colors.success} />
+
+                  <Text style={styles.trackingButtonText}>
+                    Journey Tracking Active
                   </Text>
                 </TouchableOpacity>
               )}
@@ -301,5 +366,38 @@ const styles = StyleSheet.create({
     color: colors.surface,
     fontWeight: "700",
     fontSize: 13,
+  },
+  startButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.sm,
+    gap: 6,
+  },
+
+  startButtonText: {
+    color: colors.surface,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  trackingButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.successLight,
+    borderWidth: 1,
+    borderColor: colors.success,
+    borderRadius: radius.sm,
+    paddingVertical: spacing.sm,
+    gap: 6,
+  },
+
+  trackingButtonText: {
+    color: colors.success,
+    fontSize: 14,
+    fontWeight: "700",
   },
 });

@@ -1,18 +1,18 @@
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import React from "react";
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
   SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { router } from "expo-router";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import { supabase } from "../../services/supabase";
+import { colors, radius, spacing, typography } from "../../constants/theme";
 import useGlobalEvents from "../../hooks/useGlobalEvents";
-import { colors, spacing, radius, typography } from "../../constants/theme";
+import { supabase } from "../../services/supabase";
 // ^ adjust this import path to wherever your colors/spacing/radius/typography file lives
 
 export default function HomeScreen() {
@@ -104,6 +104,22 @@ export default function HomeScreen() {
           ),
           onPress: () => router.push("/profile"),
         },
+        {
+          label: "My Profile",
+          subtitle: "Manage your profile information",
+          icon: (
+            <Ionicons name="person-outline" size={22} color={colors.primary} />
+          ),
+          onPress: () => router.push("/profile"),
+        },
+        // {
+        //   label: "Add Vehicle",
+        //   subtitle: "Register a new vehicle",
+        //   icon: (
+        //     <Ionicons name="add-outline" size={22} color={colors.primary} />
+        //   ),
+        //   onPress: () => router.push("/profile/add-vehicle"),
+        // },
         {
           label: "My Cars",
           subtitle: "Vehicles you've added",

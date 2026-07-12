@@ -24,6 +24,8 @@ interface CreateRideInput {
 
   max_seats: number;
   price: number;
+
+  women_only?: boolean;
 }
 
 export async function createRide(rideData: CreateRideInput) {
@@ -32,6 +34,10 @@ export async function createRide(rideData: CreateRideInput) {
       ...rideData,
       available_seats: rideData.max_seats,
       ride_status: "active",
+
+      women_only: rideData.women_only ?? false,
+
+      safety_mode_enabled: rideData.women_only ?? false,
     },
   ]);
 }
@@ -45,30 +51,32 @@ export async function getMyRides(userId: string) {
     .from("rides")
     .select("*")
     .eq("driver_id", userId)
-    .order("ride_date", { ascending: true });
+    .order("ride_date", {
+      ascending: true,
+    });
 }
 
 export async function searchRides(source: string, destination: string) {
-  return await supabase
-    .from("rides")
-    .select("*")
-    .ilike("source", `%${source}%`)
-    .ilike("destination", `%${destination}%`)
-    .eq("ride_status", "active")
-    .gt("available_seats", 0)
-    .order("ride_date");
+  return await supabase.rpc("search_available_rides", {
+    p_source: source.trim(),
+    p_destination: destination.trim(),
+  });
 }
 
 export async function completeRide(rideId: string) {
   return await supabase
     .from("rides")
-    .update({ ride_status: "completed" })
+    .update({
+      ride_status: "completed",
+    })
     .eq("id", rideId);
 }
 
 export async function cancelRide(rideId: string) {
   return await supabase
     .from("rides")
-    .update({ ride_status: "cancelled" })
+    .update({
+      ride_status: "cancelled",
+    })
     .eq("id", rideId);
 }

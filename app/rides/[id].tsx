@@ -1,24 +1,26 @@
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { Picker } from "@react-native-picker/picker";
 import { useEffect, useRef, useState } from "react";
 import {
-  View,
-  Text,
   ActivityIndicator,
   Alert,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Modal,
   Animated,
-  Easing,
+  Modal,
   Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { Picker } from "@react-native-picker/picker";
 import { getAvailableSeats } from "../../services/seat.service";
 
-import { useLocalSearchParams, router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 
-import { supabase } from "../../services/supabase";
 import { bookRide } from "../../services/booking.service";
+import { supabase } from "../../services/supabase";
+
+import { colors, radius, spacing } from "@/constants/theme";
 
 export default function RideDetailsScreen() {
   const { id } = useLocalSearchParams();
@@ -206,6 +208,26 @@ export default function RideDetailsScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {ride?.ride_status === "in_progress" && (
+        <TouchableOpacity
+          style={styles.journeyButton}
+          activeOpacity={0.85}
+          onPress={() =>
+            router.push({
+              pathname: "/rides/journey/[rideId]" as any,
+
+              params: {
+                rideId: ride.id,
+              },
+            })
+          }
+        >
+          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+
+          <Text style={styles.journeyButtonText}>View Journey Progress</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.footer}>
         <TouchableOpacity
@@ -458,6 +480,22 @@ const styles = StyleSheet.create({
   doneButtonText: {
     color: "#ffffff",
     fontSize: 16,
+    fontWeight: "700",
+  },
+  journeyButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    marginTop: spacing.md,
+  },
+
+  journeyButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
     fontWeight: "700",
   },
 });

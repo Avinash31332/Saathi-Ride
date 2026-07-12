@@ -1,29 +1,29 @@
-import { useState, useEffect, useRef } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
   Alert,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
   Animated,
   Dimensions,
   FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import DateTimePicker from "@react-native-community/datetimepicker";
 
+import PlaceSearch from "../../components/maps/PlaceSearch";
+import RouteMap from "../../components/maps/RouteMap";
+import { colors, radius, spacing, typography } from "../../constants/theme";
+import { getRoute } from "../../services/maps/route.service";
 import { createRide } from "../../services/ride.service";
 import { supabase } from "../../services/supabase";
 import { getMyVehicles } from "../../services/vehicle.service";
-import { getRoute } from "../../services/maps/route.service";
-import PlaceSearch from "../../components/maps/PlaceSearch";
-import RouteMap from "../../components/maps/RouteMap";
-import { colors, spacing, radius, typography } from "../../constants/theme";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const STEP_COUNT = 3;
@@ -48,6 +48,8 @@ export default function CreateRideScreen() {
   const [price, setPrice] = useState("");
   const [notes, setNotes] = useState("");
   const [luggageAllowed, setLuggageAllowed] = useState(false);
+  const [womenOnly, setWomenOnly] = useState(false);
+  const [driverProfile, setDriverProfile] = useState<any>(null);
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -56,8 +58,31 @@ export default function CreateRideScreen() {
   const slideAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    loadVehicles();
+    loadDriverData();
   }, []);
+
+  const loadDriverData = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+
+    if (error) {
+      console.log("DRIVER PROFILE ERROR:", error);
+      return;
+    }
+
+    setDriverProfile(profile);
+
+    await loadVehicles();
+  };
 
   const loadVehicles = async () => {
     const {
@@ -140,6 +165,28 @@ export default function CreateRideScreen() {
       return;
     }
 
+    if (
+      driverProfile?.driver_verification_status !== "approved" ||
+      !driverProfile?.aadhaar_verified ||
+      !driverProfile?.driving_license_verified
+    ) {
+      Alert.alert(
+        "Driver verification required",
+        "Your Aadhaar and driving license must be verified before you can publish a ride.",
+      );
+
+      return;
+    }
+
+    if (womenOnly && !driverProfile?.women_trusted_driver) {
+      Alert.alert(
+        "Women Only unavailable",
+        "Enhanced driver verification is required to publish Women Only rides.",
+      );
+
+      return;
+    }
+
     setSubmitting(true);
 
     console.log("========== CREATE RIDE ==========");
@@ -202,7 +249,7 @@ export default function CreateRideScreen() {
 
       notes,
       luggage_allowed: luggageAllowed,
-
+      women_only: womenOnly,
       max_seats: maxSeats,
       price: Number(price),
     });
@@ -579,6 +626,54 @@ export default function CreateRideScreen() {
 
               <View style={styles.fieldGroup}>
                 <TouchableOpacity
+                  style={[
+                    styles.womenRideCard,
+                    womenOnly && styles.womenRideCardActive,
+                    !driverProfile?.women_trusted_driver &&
+                      styles.womenRideCardDisabled,
+                  ]}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    if (!driverProfile?.women_trusted_driver) {
+                      Alert.alert(
+                        "Enhanced verification required",
+                        "Women Only rides can only be published by Women Trusted Drivers.",
+                      );
+
+                      return;
+                    }
+
+                    setWomenOnly(!womenOnly);
+                  }}
+                >
+                  <View style={styles.womenRideIcon}>
+                    <Ionicons
+                      name="shield-checkmark"
+                      size={24}
+                      color="#BE185D"
+                    />
+                  </View>
+
+                  <View style={styles.womenRideContent}>
+                    <Text style={styles.womenRideTitle}>Women Only Ride</Text>
+
+                    <Text style={styles.womenRideSubtitle}>
+                      {driverProfile?.women_trusted_driver
+                        ? "Only women passengers can discover and book this ride"
+                        : "Complete enhanced driver verification to unlock"}
+                    </Text>
+                  </View>
+
+                  <Ionicons
+                    name={womenOnly ? "checkmark-circle" : "ellipse-outline"}
+                    size={25}
+                    color={womenOnly ? "#BE185D" : colors.textMuted}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <TouchableOpacity
                   style={styles.luggageRow}
                   activeOpacity={0.8}
                   onPress={() => setLuggageAllowed(!luggageAllowed)}
@@ -920,4 +1015,50 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   nextButtonText: { color: "white", fontSize: 16, fontWeight: "700" },
+  womenRideCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1.5,
+    borderColor: "#FBCFE8",
+    borderRadius: radius.lg,
+    padding: spacing.md,
+  },
+
+  womenRideCardActive: {
+    backgroundColor: "#FDF2F8",
+    borderColor: "#BE185D",
+  },
+
+  womenRideCardDisabled: {
+    opacity: 0.6,
+  },
+
+  womenRideIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#FCE7F3",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  womenRideContent: {
+    flex: 1,
+    marginLeft: spacing.md,
+    marginRight: spacing.sm,
+  },
+
+  womenRideTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+
+  womenRideSubtitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    marginTop: 3,
+  },
 });
