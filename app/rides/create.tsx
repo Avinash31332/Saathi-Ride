@@ -102,6 +102,11 @@ export default function CreateRideScreen() {
   const loadRoute = async (start: any, end: any) => {
     try {
       const result = await getRoute(start, end);
+
+      console.log("========== ROUTE POLYLINE ==========");
+
+      console.log(JSON.stringify(result.polyline, null, 2));
+
       setRoute(result);
     } catch (e) {
       console.log(e);

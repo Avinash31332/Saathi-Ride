@@ -143,13 +143,47 @@ export default function MyRidesScreen() {
     setLoading(false);
   };
 
-  const openDriverTracking = (ride: any) => {
-    router.push({
-      pathname: "/rides/driver-tracking/[id]",
-      params: {
-        id: ride.id,
-      },
-    });
+  const handleJourneyPress = (ride: any) => {
+    /*
+     * Ride has not started.
+     *
+     * Keep using the existing driver
+     * tracking screen because this is
+     * where Start Journey currently lives.
+     */
+
+    if (ride.ride_status === "active") {
+      router.push({
+        pathname: "/rides/driver-tracking/[id]",
+
+        params: {
+          id: ride.id,
+        },
+      });
+
+      return;
+    }
+
+    /*
+     * Journey already started.
+     *
+     * Open the unified My Journey screen.
+     */
+
+    if (
+      ride.ride_status === "in_progress" ||
+      ride.ride_status === "awaiting_confirmation"
+    ) {
+      router.push({
+        pathname: "/rides/journey/[rideId]",
+
+        params: {
+          rideId: ride.id,
+        },
+      });
+
+      return;
+    }
   };
 
   const statusStyle = (status: string) => {
@@ -214,6 +248,7 @@ export default function MyRidesScreen() {
         styles.screen,
         {
           opacity: fade,
+
           transform: [
             {
               translateY: slide,
@@ -255,8 +290,14 @@ export default function MyRidesScreen() {
         renderItem={({ item }) => {
           const badge = statusStyle(item.ride_status);
 
-          const canTrack =
-            item.ride_status === "active" || item.ride_status === "in_progress";
+          const canOpenJourney =
+            item.ride_status === "active" ||
+            item.ride_status === "in_progress" ||
+            item.ride_status === "awaiting_confirmation";
+
+          const journeyStarted =
+            item.ride_status === "in_progress" ||
+            item.ride_status === "awaiting_confirmation";
 
           return (
             <AnimatedRideCard>
@@ -384,49 +425,35 @@ export default function MyRidesScreen() {
                 </View>
               </View>
 
-              {canTrack && (
+              {canOpenJourney && (
                 <Pressable
                   style={({ pressed }) => [
-                    item.ride_status === "in_progress"
-                      ? styles.trackingButton
-                      : styles.startButton,
+                    journeyStarted ? styles.trackingButton : styles.startButton,
 
                     pressed && styles.buttonPressed,
                   ]}
-                  onPress={() => openDriverTracking(item)}
+                  onPress={() => handleJourneyPress(item)}
                 >
                   <Ionicons
-                    name={
-                      item.ride_status === "in_progress" ? "radio" : "navigate"
-                    }
+                    name={journeyStarted ? "radio" : "navigate"}
                     size={18}
-                    color={
-                      item.ride_status === "in_progress"
-                        ? colors.success
-                        : "#FFFFFF"
-                    }
+                    color={journeyStarted ? colors.success : "#FFFFFF"}
                   />
 
                   <Text
                     style={
-                      item.ride_status === "in_progress"
+                      journeyStarted
                         ? styles.trackingButtonText
                         : styles.startButtonText
                     }
                   >
-                    {item.ride_status === "in_progress"
-                      ? "Journey Tracking Active"
-                      : "Start Journey Tracking"}
+                    {journeyStarted ? "Open My Journey" : "Start Journey"}
                   </Text>
 
                   <Ionicons
                     name="chevron-forward"
                     size={18}
-                    color={
-                      item.ride_status === "in_progress"
-                        ? colors.success
-                        : "#FFFFFF"
-                    }
+                    color={journeyStarted ? colors.success : "#FFFFFF"}
                   />
                 </Pressable>
               )}
@@ -646,6 +673,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.sm,
     marginTop: spacing.lg,
+    paddingHorizontal: spacing.md,
   },
 
   startButtonText: {
@@ -667,6 +695,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.sm,
     marginTop: spacing.lg,
+    paddingHorizontal: spacing.md,
   },
 
   trackingButtonText: {

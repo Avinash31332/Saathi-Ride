@@ -1,222 +1,257 @@
-import { supabase } from "@/services/supabase";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
+
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
-import { colors, radius, spacing, typography } from "../../constants/theme";
-import { searchRides } from "../../services/ride.service";
-import { getAvailableSeats } from "../../services/seat.service";
 
-// How long to wait after the last keystroke before hitting the DB.
-// Keeps "letter to letter" search from firing a query on every single
-// character when someone is typing fast.
-const DEBOUNCE_MS = 300;
+import PlaceSearch from "../../components/maps/PlaceSearch";
+
+import {
+  colors,
+  radius,
+  shadow,
+  spacing,
+  typography,
+} from "../../constants/theme";
+
+import { searchSegmentRides } from "../../services/ride.service";
+
+import { getMyProfile } from "../../services/profile.service";
 
 export default function SearchRideScreen() {
-  const [source, setSource] = useState("");
-  const [destination, setDestination] = useState("");
+  const [pickup, setPickup] = useState<any>(null);
+
+  const [drop, setDrop] = useState<any>(null);
+
   const [rides, setRides] = useState<any[]>([]);
+
   const [loading, setLoading] = useState(false);
+
   const [searched, setSearched] = useState(false);
-  //isFemale
+
+  const [womenOnly, setWomenOnly] = useState(false);
+
   const [isFemale, setIsFemale] = useState(false);
-  const [womenOnlyFilter, setWomenOnlyFilter] = useState(false);
 
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
-  const runSearch = async (src: string, dest: string) => {
-    setLoading(true);
+  const slideAnim = useRef(new Animated.Value(18)).current;
 
-    const { data, error } = await searchRides(src, dest);
+  useEffect(() => {
+    loadProfile();
 
-    if (error) {
-      console.log(error);
-      setLoading(false);
-      return;
-    }
-
-    const ridesWithSeats = await Promise.all(
-      (data || []).map(async (ride) => {
-        const seats = await getAvailableSeats(ride.id);
-
-        return {
-          ...ride,
-          currentAvailableSeats: seats,
-        };
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
       }),
-    );
 
-    setRides(ridesWithSeats);
-    setSearched(true);
-    setLoading(false);
-  };
-
-  // Fires on every change to source/destination, debounced, so partial
-  // text ("gun") matches full names ("Guntur") as the user types,
-  // instead of only on a manual Search button press.
-  useEffect(() => {
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-
-    if (source.trim().length === 0 && destination.trim().length === 0) {
-      setRides([]);
-      setSearched(false);
-      return;
-    }
-
-    debounceTimer.current = setTimeout(() => {
-      runSearch(source, destination);
-    }, DEBOUNCE_MS);
-
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, [source, destination]);
-
-  useEffect(() => {
-    loadUserGender();
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        friction: 8,
+        tension: 60,
+        useNativeDriver: true,
+      }),
+    ]).start();
   }, []);
 
-  const loadUserGender = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("gender")
-      .eq("id", user.id)
-      .single();
-
-    if (error) {
-      console.log("GENDER LOAD ERROR:", error);
-      return;
+  useEffect(() => {
+    if (pickup && drop) {
+      runSearch();
     }
+  }, [pickup, drop, womenOnly]);
+
+  const loadProfile = async () => {
+    const { data } = await getMyProfile();
 
     setIsFemale(data?.gender === "female");
   };
 
+  const runSearch = async () => {
+    if (!pickup || !drop) {
+      return;
+    }
+
+    setLoading(true);
+
+    console.log("========== SEGMENT SEARCH ==========");
+
+    console.log("PICKUP:", pickup.name, pickup.latitude, pickup.longitude);
+
+    console.log("DROP:", drop.name, drop.latitude, drop.longitude);
+
+    const { data, error } = await searchSegmentRides(
+      {
+        latitude: pickup.latitude,
+        longitude: pickup.longitude,
+      },
+
+      {
+        latitude: drop.latitude,
+        longitude: drop.longitude,
+      },
+
+      womenOnly,
+    );
+
+    if (error) {
+      console.log("SEGMENT SEARCH ERROR:", error);
+
+      setRides([]);
+      setSearched(true);
+      setLoading(false);
+
+      return;
+    }
+
+    console.log("MATCHED RIDES:", data?.length || 0);
+
+    setRides(data || []);
+    setSearched(true);
+    setLoading(false);
+  };
+
   return (
-    <View style={styles.container}>
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          opacity: fadeAnim,
+
+          transform: [
+            {
+              translateY: slideAnim,
+            },
+          ],
+        },
+      ]}
+    >
       <Text style={styles.title}>Search Ride</Text>
-      <Text style={styles.subtitle}>Find a ride that matches your route</Text>
+
+      <Text style={styles.subtitle}>
+        Find rides travelling through your route
+      </Text>
 
       <View style={styles.form}>
-        <View style={styles.inputRow}>
-          <Ionicons
-            name="ellipse-outline"
-            size={18}
-            color={colors.primary}
-            style={styles.inputIcon}
-          />
-          <TextInput
-            placeholder="Source"
-            placeholderTextColor={colors.textMuted}
-            value={source}
-            onChangeText={setSource}
-            style={styles.input}
-          />
-          {loading && <ActivityIndicator size="small" color={colors.primary} />}
+        <View style={styles.placeRow}>
+          <View style={[styles.routeDot, styles.pickupDot]} />
+
+          <View style={styles.placeContent}>
+            <Text style={styles.placeLabel}>Pickup</Text>
+
+            <PlaceSearch
+              placeholder="Where will you board?"
+              onPlaceSelected={(place) => {
+                setPickup(place);
+              }}
+              onPlaceCleared={() => {
+                setPickup(null);
+                setRides([]);
+                setSearched(false);
+              }}
+            />
+          </View>
         </View>
 
-        <View style={styles.inputRow}>
-          <Ionicons
-            name="location-outline"
-            size={18}
-            color={colors.danger}
-            style={styles.inputIcon}
-          />
-          <TextInput
-            placeholder="Destination"
-            placeholderTextColor={colors.textMuted}
-            value={destination}
-            onChangeText={setDestination}
-            style={styles.input}
-          />
+        <View style={styles.routeConnector} />
+
+        <View style={styles.placeRow}>
+          <View style={[styles.routeDot, styles.dropDot]} />
+
+          <View style={styles.placeContent}>
+            <Text style={styles.placeLabel}>Drop</Text>
+
+            <PlaceSearch
+              placeholder="Where are you going?"
+              onPlaceSelected={(place) => {
+                setDrop(place);
+              }}
+              onPlaceCleared={() => {
+                setDrop(null);
+                setRides([]);
+                setSearched(false);
+              }}
+            />
+          </View>
         </View>
       </View>
 
       {isFemale && (
-        <View style={styles.filterSection}>
-          <Text style={styles.filterLabel}>Ride preference</Text>
+        <Pressable
+          style={({ pressed }) => [
+            styles.womenFilter,
 
-          <View style={styles.filterRow}>
-            <Pressable
-              style={[
-                styles.filterChip,
-                !womenOnlyFilter && styles.filterChipActive,
-              ]}
-              onPress={() => setWomenOnlyFilter(false)}
-            >
-              <Ionicons
-                name="car-outline"
-                size={16}
-                color={!womenOnlyFilter ? colors.primary : colors.textSecondary}
-              />
+            womenOnly && styles.womenFilterActive,
 
-              <Text
-                style={[
-                  styles.filterChipText,
-                  !womenOnlyFilter && styles.filterChipTextActive,
-                ]}
-              >
-                All rides
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[
-                styles.filterChip,
-                womenOnlyFilter && styles.womenFilterChipActive,
-              ]}
-              onPress={() => setWomenOnlyFilter(true)}
-            >
-              <Ionicons
-                name="shield-checkmark"
-                size={16}
-                color={womenOnlyFilter ? "#BE185D" : colors.textSecondary}
-              />
-
-              <Text
-                style={[
-                  styles.filterChipText,
-                  womenOnlyFilter && styles.womenFilterTextActive,
-                ]}
-              >
-                Women Only
-              </Text>
-            </Pressable>
+            pressed && {
+              transform: [
+                {
+                  scale: 0.98,
+                },
+              ],
+            },
+          ]}
+          onPress={() => setWomenOnly((value) => !value)}
+        >
+          <View style={styles.womenIcon}>
+            <Ionicons name="shield-checkmark" size={20} color="#BE185D" />
           </View>
+
+          <View style={styles.womenContent}>
+            <Text style={styles.womenTitle}>Women Only</Text>
+
+            <Text style={styles.womenSubtitle}>
+              Show rides reserved for women passengers
+            </Text>
+          </View>
+
+          <Ionicons
+            name={womenOnly ? "checkmark-circle" : "ellipse-outline"}
+            size={24}
+            color={womenOnly ? "#BE185D" : colors.textMuted}
+          />
+        </Pressable>
+      )}
+
+      {loading && (
+        <View style={styles.loadingRow}>
+          <ActivityIndicator color={colors.primary} />
+
+          <Text style={styles.loadingText}>Matching routes...</Text>
         </View>
       )}
 
       <FlatList
-        data={
-          womenOnlyFilter
-            ? rides.filter((ride) => ride.women_only === true)
-            : rides
-        }
+        data={rides}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{
-          paddingTop: spacing.md,
-          paddingBottom: spacing.xl,
-        }}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         ListEmptyComponent={
           searched && !loading ? (
             <View style={styles.emptyState}>
-              <Ionicons name="car-outline" size={28} color={colors.textMuted} />
+              <View style={styles.emptyIcon}>
+                <Ionicons
+                  name="trail-sign-outline"
+                  size={30}
+                  color={colors.primary}
+                />
+              </View>
+
+              <Text style={styles.emptyTitle}>No route matches</Text>
+
               <Text style={styles.emptyText}>
-                No rides found for this route
+                No active driver is currently passing through both locations in
+                this direction.
               </Text>
             </View>
           ) : null
@@ -226,64 +261,131 @@ export default function SearchRideScreen() {
             onPress={() =>
               router.push({
                 pathname: "/rides/[id]",
-                params: { id: item.id },
+
+                params: {
+                  id: item.id,
+
+                  pickupName: pickup?.name,
+
+                  dropName: drop?.name,
+
+                  pickupLat: pickup?.latitude,
+
+                  pickupLng: pickup?.longitude,
+
+                  dropLat: drop?.latitude,
+
+                  dropLng: drop?.longitude,
+
+                  pickupProgress: item.pickupProgress,
+
+                  dropProgress: item.dropProgress,
+
+                  pickupRouteDistanceKm: item.pickupRouteDistanceKm,
+
+                  dropRouteDistanceKm: item.dropRouteDistanceKm,
+
+                  segmentDistanceKm: item.segmentDistanceKm,
+
+                  segmentPrice: item.segmentPrice,
+                },
               })
             }
-            style={({ pressed }) => [styles.card, pressed && { opacity: 0.9 }]}
+            style={({ pressed }) => [
+              styles.card,
+
+              pressed && {
+                transform: [
+                  {
+                    scale: 0.98,
+                  },
+                ],
+              },
+            ]}
           >
-            {item.women_only && (
-              <View style={styles.womenBadge}>
-                <Ionicons name="shield-checkmark" size={13} color="#BE185D" />
-
-                <Text style={styles.womenBadgeText}>Women Only</Text>
-              </View>
-            )}
-
             <View style={styles.cardHeader}>
-              <Text style={styles.route} numberOfLines={1}>
-                {item.source} → {item.destination}
-              </Text>
+              <View style={styles.routeBadge}>
+                <Ionicons
+                  name="git-branch-outline"
+                  size={15}
+                  color={colors.primary}
+                />
 
-              <Text style={styles.price}>₹{item.price}</Text>
+                <Text style={styles.routeBadgeText}>Route Match</Text>
+              </View>
+
+              {item.women_only && (
+                <View style={styles.womenBadge}>
+                  <Ionicons name="shield-checkmark" size={13} color="#BE185D" />
+
+                  <Text style={styles.womenBadgeText}>Women Only</Text>
+                </View>
+              )}
             </View>
 
-            <View style={styles.cardMetaRow}>
-              <View style={styles.metaItem}>
-                <Ionicons
-                  name="calendar-outline"
-                  size={14}
-                  color={colors.textSecondary}
-                />
+            <Text style={styles.rideRoute}>{item.source}</Text>
 
-                <Text style={styles.metaText}>{item.ride_date}</Text>
+            <View style={styles.routeLineRow}>
+              <View style={styles.smallRouteLine} />
+
+              <Text style={styles.passingText}>passes through your route</Text>
+            </View>
+
+            <Text style={styles.rideRoute}>{item.destination}</Text>
+
+            <View style={styles.divider} />
+
+            <View style={styles.segmentRow}>
+              <View>
+                <Text style={styles.segmentLabel}>YOUR SEGMENT</Text>
+
+                <Text style={styles.segmentRoute} numberOfLines={1}>
+                  {pickup?.name} → {drop?.name}
+                </Text>
               </View>
 
+              <Text style={styles.price}>₹{item.segmentPrice}</Text>
+            </View>
+
+            <View style={styles.metaRow}>
               <View style={styles.metaItem}>
                 <Ionicons
-                  name="time-outline"
-                  size={14}
+                  name="navigate-outline"
+                  size={15}
                   color={colors.textSecondary}
                 />
 
-                <Text style={styles.metaText}>{item.ride_time}</Text>
+                <Text style={styles.metaText}>
+                  {Number(item.segmentDistanceKm).toFixed(1)} km
+                </Text>
               </View>
 
               <View style={styles.metaItem}>
                 <Ionicons
                   name="people-outline"
-                  size={14}
+                  size={15}
                   color={colors.textSecondary}
                 />
 
                 <Text style={styles.metaText}>
-                  {item.currentAvailableSeats} seats
+                  {item.availableSegmentSeats} seats
                 </Text>
+              </View>
+
+              <View style={styles.metaItem}>
+                <Ionicons
+                  name="time-outline"
+                  size={15}
+                  color={colors.textSecondary}
+                />
+
+                <Text style={styles.metaText}>{item.ride_time}</Text>
               </View>
             </View>
           </Pressable>
         )}
       />
-    </View>
+    </Animated.View>
   );
 }
 
@@ -294,89 +396,157 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingTop: spacing.xl,
   },
+
   title: {
     ...typography.title,
   },
+
   subtitle: {
     ...typography.subtitle,
     marginTop: 4,
     marginBottom: spacing.lg,
   },
+
   form: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.md,
+    ...shadow.card,
   },
-  inputRow: {
+
+  placeRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+
+  routeDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginTop: 34,
+    marginRight: spacing.sm,
+  },
+
+  pickupDot: {
+    backgroundColor: colors.primary,
+  },
+
+  dropDot: {
+    backgroundColor: colors.danger,
+  },
+
+  routeConnector: {
+    width: 2,
+    height: 15,
+    backgroundColor: colors.border,
+    marginLeft: 5,
+  },
+
+  placeContent: {
+    flex: 1,
+  },
+
+  placeLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
+  },
+
+  womenFilter: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1.5,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
     borderColor: colors.border,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+
+  womenFilterActive: {
+    borderColor: "#F472B6",
+    backgroundColor: "#FDF2F8",
+  },
+
+  womenIcon: {
+    width: 40,
+    height: 40,
     borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
+    backgroundColor: "#FCE7F3",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
   },
-  inputIcon: {
-    marginRight: 8,
-  },
-  input: {
+
+  womenContent: {
     flex: 1,
-    paddingVertical: 14,
-    fontSize: 16,
+  },
+
+  womenTitle: {
+    fontSize: 15,
+    fontWeight: "700",
     color: colors.textPrimary,
   },
+
+  womenSubtitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+
+  loadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+
+  loadingText: {
+    color: colors.textSecondary,
+  },
+
+  listContent: {
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
+  },
+
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
+    ...shadow.card,
   },
+
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
+    marginBottom: spacing.md,
+  },
+
+  routeBadge: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 5,
+    backgroundColor: colors.primaryLight,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: radius.full,
   },
-  route: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.textPrimary,
-    flex: 1,
-    marginRight: spacing.sm,
-  },
-  price: {
-    fontSize: 16,
-    fontWeight: "700",
+
+  routeBadgeText: {
     color: colors.primary,
+    fontSize: 11,
+    fontWeight: "700",
   },
-  cardMetaRow: {
-    flexDirection: "row",
-    gap: spacing.md,
-    marginTop: spacing.sm,
-  },
-  metaItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  metaText: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  emptyState: {
-    alignItems: "center",
-    paddingVertical: spacing.lg,
-  },
-  emptyText: {
-    marginTop: spacing.sm,
-    color: colors.textMuted,
-    fontSize: 14,
-  },
+
   womenBadge: {
-    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
@@ -384,7 +554,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: radius.full,
-    marginBottom: spacing.sm,
   },
 
   womenBadgeText: {
@@ -393,55 +562,108 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  filterSection: {
-    marginTop: spacing.md,
-  },
-
-  filterLabel: {
-    fontSize: 13,
+  rideRoute: {
+    fontSize: 15,
     fontWeight: "600",
-    color: colors.textSecondary,
-    marginBottom: spacing.sm,
+    color: colors.textPrimary,
   },
 
-  filterRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-  },
-
-  filterChip: {
+  routeLineRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.full,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    marginVertical: 5,
   },
 
-  filterChipActive: {
-    backgroundColor: colors.primaryLight,
-    borderColor: colors.primary,
+  smallRouteLine: {
+    width: 2,
+    height: 15,
+    backgroundColor: colors.primary,
+    marginLeft: 5,
+    marginRight: spacing.sm,
   },
 
-  filterChipText: {
-    fontSize: 13,
+  passingText: {
+    fontSize: 11,
+    color: colors.textMuted,
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.md,
+  },
+
+  segmentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  segmentLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.textMuted,
+    letterSpacing: 0.8,
+  },
+
+  segmentRoute: {
+    fontSize: 14,
     fontWeight: "600",
-    color: colors.textSecondary,
+    color: colors.textPrimary,
+    marginTop: 3,
+    maxWidth: 230,
   },
 
-  filterChipTextActive: {
+  price: {
+    fontSize: 20,
+    fontWeight: "800",
     color: colors.primary,
   },
 
-  womenFilterChipActive: {
-    backgroundColor: "#FDF2F8",
-    borderColor: "#BE185D",
+  metaRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.md,
   },
 
-  womenFilterTextActive: {
-    color: "#BE185D",
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+
+  metaText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
+  },
+
+  emptyIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: radius.lg,
+    backgroundColor: colors.primaryLight,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+
+  emptyText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 19,
+    marginTop: spacing.xs,
   },
 });

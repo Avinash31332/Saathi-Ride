@@ -1,310 +1,461 @@
-import * as Location from "expo-location";
+import {
+  AdaptiveCheckpointResult,
+  adaptiveProcessCheckpoint,
+  AdaptiveTrackingMode,
+  clearTrackingCache,
+} from "./adaptive-tracking.service";
+
+import {
+  calculateLocalRouteProgress,
+  LocalRouteProgressResult,
+} from "./maps/local-route-progress.service";
 
 import { supabase } from "./supabase";
 
-export type TrackingMode = "normal" | "safety" | "emergency";
+export type JourneyRole = "driver" | "passenger";
 
-export interface JourneyTrackingState {
-  ride_id: string;
+export interface JourneyData {
+  role: JourneyRole;
 
-  driver_lat: number;
+  ride: any;
 
-  driver_lng: number;
+  booking: any | null;
 
-  progress_percentage: number;
+  passengers: any[];
 
-  distance_to_destination_km: number | null;
+  driver: any | null;
 
-  tracking_mode: TrackingMode;
+  vehicle: any | null;
 
-  last_checkpoint: number;
-
-  last_location_at: string;
-
-  route_deviation: boolean;
-
-  updated_at: string;
+  tracking: any | null;
 }
 
-const NORMAL_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+export interface JourneyLocationResult {
+  routeProgress: LocalRouteProgressResult;
 
-const SAFETY_SYNC_INTERVAL_MS = 75 * 1000;
-
-const EMERGENCY_SYNC_INTERVAL_MS = 20 * 1000;
-
-const NORMAL_DISTANCE_TRIGGER_KM = 5;
-
-const SAFETY_DISTANCE_TRIGGER_KM = 1;
-
-type ActiveJourney = {
-  rideId: string;
-
-  destinationLat: number;
-
-  destinationLng: number;
-
-  totalDistanceKm: number;
-
-  mode: TrackingMode;
-
-  lastSyncAt: number;
-
-  lastSyncedLat: number;
-
-  lastSyncedLng: number;
-
-  subscription: Location.LocationSubscription;
-};
-
-let activeJourney: ActiveJourney | null = null;
-
-function toRadians(value: number) {
-  return (value * Math.PI) / 180;
+  adaptiveResult: AdaptiveCheckpointResult;
 }
 
-function calculateDistanceKm(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number,
-) {
-  const earthRadiusKm = 6371;
+/*
+ * In-memory route cache.
+ *
+ * The route polyline is static for the whole
+ * journey.
+ *
+ * There is absolutely no reason to query the
+ * rides table on every GPS reading.
+ */
 
-  const latitudeDifference = toRadians(lat2 - lat1);
+const journeyRouteCache = new Map<
+  string,
+  {
+    routePolyline: string;
 
-  const longitudeDifference = toRadians(lng2 - lng1);
+    rideStatus: string;
 
-  const a =
-    Math.sin(latitudeDifference / 2) * Math.sin(latitudeDifference / 2) +
-    Math.cos(toRadians(lat1)) *
-      Math.cos(toRadians(lat2)) *
-      Math.sin(longitudeDifference / 2) *
-      Math.sin(longitudeDifference / 2);
+    loadedAt: number;
+  }
+>();
 
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+const ROUTE_CACHE_LIFETIME_MS = 30 * 60 * 1000;
 
-  return earthRadiusKm * c;
-}
+async function getJourneyRoute(rideId: string) {
+  const cached = journeyRouteCache.get(rideId);
 
-function getSyncInterval(mode: TrackingMode) {
-  if (mode === "emergency") {
-    return EMERGENCY_SYNC_INTERVAL_MS;
+  if (cached && Date.now() - cached.loadedAt < ROUTE_CACHE_LIFETIME_MS) {
+    return {
+      data: cached,
+      error: null,
+      source: "cache" as const,
+    };
   }
 
-  if (mode === "safety") {
-    return SAFETY_SYNC_INTERVAL_MS;
+  const { data, error } = await supabase
+    .from("rides")
+    .select(
+      `
+      id,
+      route_polyline,
+      ride_status
+      `,
+    )
+    .eq("id", rideId)
+    .single();
+
+  if (error || !data) {
+    return {
+      data: null,
+      error: error || new Error("Ride not found"),
+      source: "database" as const,
+    };
   }
 
-  return NORMAL_SYNC_INTERVAL_MS;
-}
-
-function getDistanceTrigger(mode: TrackingMode) {
-  if (mode === "emergency") {
-    return 0;
+  if (!data.route_polyline) {
+    return {
+      data: null,
+      error: new Error("Ride route polyline is missing"),
+      source: "database" as const,
+    };
   }
 
-  if (mode === "safety") {
-    return SAFETY_DISTANCE_TRIGGER_KM;
-  }
+  const routeData = {
+    routePolyline: data.route_polyline,
 
-  return NORMAL_DISTANCE_TRIGGER_KM;
-}
+    rideStatus: data.ride_status,
 
-function calculateProgress(
-  distanceToDestinationKm: number,
-  totalDistanceKm: number,
-) {
-  if (totalDistanceKm <= 0) {
-    return 0;
-  }
-
-  const progress =
-    ((totalDistanceKm - distanceToDestinationKm) / totalDistanceKm) * 100;
-
-  return Math.min(Math.max(progress, 0), 100);
-}
-
-export async function requestJourneyLocationPermission() {
-  const { status } = await Location.requestForegroundPermissionsAsync();
-
-  return status === "granted";
-}
-
-export async function getCurrentJourneyLocation() {
-  return await Location.getCurrentPositionAsync({
-    accuracy: Location.Accuracy.High,
-  });
-}
-
-export async function startRideJourney(
-  rideId: string,
-  destinationLat: number,
-  destinationLng: number,
-  totalDistanceKm: number,
-) {
-  const permissionGranted = await requestJourneyLocationPermission();
-
-  if (!permissionGranted) {
-    throw new Error("Location permission is required to start the journey.");
-  }
-
-  if (activeJourney) {
-    await stopLocalJourneyTracking();
-  }
-
-  const location = await getCurrentJourneyLocation();
-
-  const { data: mode, error } = await supabase.rpc("start_ride_journey", {
-    p_ride_id: rideId,
-
-    p_lat: location.coords.latitude,
-
-    p_lng: location.coords.longitude,
-  });
-
-  if (error) {
-    throw error;
-  }
-
-  const trackingMode = (mode as TrackingMode) || "normal";
-
-  const subscription = await Location.watchPositionAsync(
-    {
-      accuracy: Location.Accuracy.Balanced,
-
-      timeInterval: 30 * 1000,
-
-      distanceInterval: 250,
-    },
-
-    async (newLocation) => {
-      await processLocationUpdate(
-        newLocation.coords.latitude,
-        newLocation.coords.longitude,
-      );
-    },
-  );
-
-  activeJourney = {
-    rideId,
-
-    destinationLat,
-
-    destinationLng,
-
-    totalDistanceKm,
-
-    mode: trackingMode,
-
-    lastSyncAt: Date.now(),
-
-    lastSyncedLat: location.coords.latitude,
-
-    lastSyncedLng: location.coords.longitude,
-
-    subscription,
+    loadedAt: Date.now(),
   };
 
-  return trackingMode;
+  journeyRouteCache.set(rideId, routeData);
+
+  return {
+    data: routeData,
+    error: null,
+    source: "database" as const,
+  };
 }
 
-async function processLocationUpdate(latitude: number, longitude: number) {
-  if (!activeJourney) {
-    return;
+/*
+ * MAIN GPS ENTRY POINT
+ *
+ * Every driver GPS reading should eventually
+ * come through this function.
+ */
+
+export async function processJourneyLocation({
+  rideId,
+
+  latitude,
+
+  longitude,
+
+  trackingMode,
+}: {
+  rideId: string;
+
+  latitude: number;
+
+  longitude: number;
+
+  trackingMode: AdaptiveTrackingMode;
+}): Promise<JourneyLocationResult> {
+  /*
+   * STEP 1
+   *
+   * Get route.
+   *
+   * Usually this comes from memory cache.
+   */
+
+  const routeResult = await getJourneyRoute(rideId);
+
+  if (routeResult.error || !routeResult.data) {
+    throw routeResult.error || new Error("Unable to load journey route");
   }
 
-  const now = Date.now();
+  console.log("JOURNEY ROUTE SOURCE:", routeResult.source);
 
-  const timeSinceLastSync = now - activeJourney.lastSyncAt;
+  /*
+   * Only active journeys should process GPS.
+   */
 
-  const movedDistanceKm = calculateDistanceKm(
-    activeJourney.lastSyncedLat,
-    activeJourney.lastSyncedLng,
+  if (routeResult.data.rideStatus !== "in_progress") {
+    throw new Error("Journey is not currently in progress");
+  }
+
+  /*
+   * STEP 2
+   *
+   * Calculate everything locally.
+   *
+   * ZERO Supabase requests here.
+   */
+
+  const routeProgress = calculateLocalRouteProgress(
+    routeResult.data.routePolyline,
+
     latitude,
+
     longitude,
   );
 
-  const requiredInterval = getSyncInterval(activeJourney.mode);
+  console.log("LOCAL ROUTE ANALYSIS:", {
+    progress: routeProgress.progressPercentage.toFixed(2),
 
-  const distanceTrigger = getDistanceTrigger(activeJourney.mode);
+    distanceFromRouteKm: routeProgress.distanceFromRouteKm.toFixed(3),
 
-  const shouldSyncByTime = timeSinceLastSync >= requiredInterval;
+    detectedDeviation: routeProgress.routeDeviation,
 
-  const shouldSyncByDistance = movedDistanceKm >= distanceTrigger;
-
-  if (!shouldSyncByTime && !shouldSyncByDistance) {
-    return;
-  }
-
-  const distanceToDestinationKm = calculateDistanceKm(
-    latitude,
-    longitude,
-    activeJourney.destinationLat,
-    activeJourney.destinationLng,
-  );
-
-  const progress = calculateProgress(
-    distanceToDestinationKm,
-    activeJourney.totalDistanceKm,
-  );
-
-  const { data: mode, error } = await supabase.rpc("update_ride_tracking", {
-    p_ride_id: activeJourney.rideId,
-
-    p_lat: latitude,
-
-    p_lng: longitude,
-
-    p_progress_percentage: progress,
-
-    p_distance_to_destination_km: distanceToDestinationKm,
+    nearestRouteIndex: routeProgress.nearestRouteIndex,
   });
 
-  if (error) {
-    console.log("JOURNEY TRACKING UPDATE ERROR:", error);
+  /*
+   * STEP 3
+   *
+   * Adaptive cache decides whether this GPS
+   * reading deserves a database upload.
+   */
 
-    return;
+  const adaptiveResult = await adaptiveProcessCheckpoint({
+    rideId,
+
+    latitude,
+
+    longitude,
+
+    progressPercentage: routeProgress.progressPercentage,
+
+    detectedRouteDeviation: routeProgress.routeDeviation,
+
+    trackingMode,
+  });
+
+  console.log("JOURNEY ADAPTIVE RESULT:", {
+    uploaded: adaptiveResult.uploaded,
+
+    reason: adaptiveResult.reason,
+
+    checkpoint: adaptiveResult.checkpoint,
+
+    confirmedDeviation: adaptiveResult.cache.routeDeviation,
+  });
+
+  return {
+    routeProgress,
+
+    adaptiveResult,
+  };
+}
+
+/*
+ * Call this when a journey starts.
+ *
+ * The route is fetched once and placed into
+ * memory before GPS readings begin.
+ */
+
+export async function prepareJourneyTracking(rideId: string) {
+  journeyRouteCache.delete(rideId);
+
+  const result = await getJourneyRoute(rideId);
+
+  if (result.error) {
+    throw result.error;
   }
 
-  activeJourney.mode = (mode as TrackingMode) || activeJourney.mode;
+  console.log("JOURNEY TRACKING PREPARED:", rideId);
 
-  activeJourney.lastSyncAt = now;
-
-  activeJourney.lastSyncedLat = latitude;
-
-  activeJourney.lastSyncedLng = longitude;
+  return result.data;
 }
 
-export async function forceJourneySync() {
-  if (!activeJourney) {
-    return;
+/*
+ * Call when ride is completed / cancelled.
+ */
+
+export async function stopJourneyTracking(rideId: string) {
+  journeyRouteCache.delete(rideId);
+
+  await clearTrackingCache(rideId);
+
+  console.log("JOURNEY TRACKING CACHE CLEARED:", rideId);
+}
+
+export async function getJourneyData(rideId: string): Promise<{
+  data: JourneyData | null;
+
+  error: any;
+}> {
+  const {
+    data: { user },
+
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError || !user) {
+    return {
+      data: null,
+
+      error: userError || new Error("User not authenticated"),
+    };
   }
 
-  const location = await getCurrentJourneyLocation();
+  /*
+   * LOAD RIDE
+   */
 
-  activeJourney.lastSyncAt = 0;
+  const {
+    data: ride,
 
-  await processLocationUpdate(
-    location.coords.latitude,
-    location.coords.longitude,
-  );
-}
+    error: rideError,
+  } = await supabase.from("rides").select("*").eq("id", rideId).single();
 
-export async function stopLocalJourneyTracking() {
-  if (!activeJourney) {
-    return;
+  if (rideError || !ride) {
+    return {
+      data: null,
+
+      error: rideError || new Error("Ride not found"),
+    };
   }
 
-  activeJourney.subscription.remove();
+  /*
+   * DETECT ROLE
+   */
 
-  activeJourney = null;
+  const isDriver = ride.driver_id === user.id;
+
+  let booking: any = null;
+
+  if (!isDriver) {
+    const {
+      data: passengerBooking,
+
+      error: bookingError,
+    } = await supabase
+      .from("bookings")
+      .select("*")
+      .eq("ride_id", rideId)
+      .eq("passenger_id", user.id)
+      .in("booking_status", ["confirmed", "completed"])
+      .maybeSingle();
+
+    if (bookingError) {
+      return {
+        data: null,
+
+        error: bookingError,
+      };
+    }
+
+    if (!passengerBooking) {
+      return {
+        data: null,
+
+        error: new Error("You are not part of this journey"),
+      };
+    }
+
+    booking = passengerBooking;
+  }
+
+  /*
+   * LOAD DRIVER
+   */
+
+  const {
+    data: driver,
+
+    error: driverError,
+  } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", ride.driver_id)
+    .single();
+
+  if (driverError) {
+    console.log("JOURNEY DRIVER ERROR:", driverError);
+  }
+
+  /*
+   * LOAD VEHICLE
+   */
+
+  let vehicle: any = null;
+
+  if (ride.vehicle_id) {
+    const {
+      data: vehicleData,
+
+      error: vehicleError,
+    } = await supabase
+      .from("vehicles")
+      .select("*")
+      .eq("id", ride.vehicle_id)
+      .maybeSingle();
+
+    if (vehicleError) {
+      console.log("JOURNEY VEHICLE ERROR:", vehicleError);
+    }
+
+    vehicle = vehicleData;
+  }
+
+  /*
+   * PASSENGER MANIFEST
+   */
+
+  let passengers: any[] = [];
+
+  if (isDriver) {
+    const {
+      data: passengerData,
+
+      error: passengerError,
+    } = await supabase
+      .from("bookings")
+      .select(
+        `
+        *,
+        profiles (
+          id,
+          full_name,
+          phone,
+          profile_image
+        )
+        `,
+      )
+      .eq("ride_id", rideId)
+      .eq("booking_status", "confirmed")
+      .order("pickup_route_progress", {
+        ascending: true,
+      });
+
+    if (passengerError) {
+      console.log("JOURNEY PASSENGER ERROR:", passengerError);
+    }
+
+    passengers = passengerData || [];
+  }
+
+  /*
+   * TRACKING STATE
+   */
+
+  const {
+    data: tracking,
+
+    error: trackingError,
+  } = await supabase
+    .from("ride_tracking")
+    .select("*")
+    .eq("ride_id", rideId)
+    .maybeSingle();
+
+  if (trackingError) {
+    console.log("JOURNEY TRACKING ERROR:", trackingError);
+  }
+
+  return {
+    data: {
+      role: isDriver ? "driver" : "passenger",
+
+      ride,
+
+      booking,
+
+      passengers,
+
+      driver: driver || null,
+
+      vehicle,
+
+      tracking: tracking || null,
+    },
+
+    error: null,
+  };
 }
 
-export function getActiveJourney() {
-  return activeJourney;
-}
-
-export async function getRideTracking(rideId: string) {
+export async function getJourneyTracking(rideId: string) {
   return await supabase
     .from("ride_tracking")
     .select("*")
@@ -312,73 +463,134 @@ export async function getRideTracking(rideId: string) {
     .maybeSingle();
 }
 
-export async function getRideSafetyEvents(rideId: string) {
+export async function getJourneySafetyEvents(
+  rideId: string,
+
+  passengerId: string,
+) {
   return await supabase
     .from("ride_safety_events")
     .select("*")
     .eq("ride_id", rideId)
+    .eq("passenger_id", passengerId)
     .order("created_at", {
       ascending: true,
     });
 }
 
-export function subscribeToRideTracking(
+export async function getTrustedContactCount() {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return {
+      count: 0,
+
+      error: new Error("User not authenticated"),
+    };
+  }
+
+  const {
+    count,
+
+    error,
+  } = await supabase
+    .from("trusted_contacts")
+    .select("*", {
+      count: "exact",
+      head: true,
+    })
+    .eq("user_id", user.id);
+
+  return {
+    count: count || 0,
+
+    error,
+  };
+}
+
+export function subscribeToJourney(
   rideId: string,
-  onTrackingUpdate: (tracking: JourneyTrackingState) => void,
+
+  onChange: () => void,
 ) {
   const channel = supabase
-    .channel(`journey-tracking-${rideId}`)
+    .channel(`journey-screen-${rideId}`)
     .on(
       "postgres_changes",
+
       {
         event: "*",
+
         schema: "public",
+
         table: "ride_tracking",
+
         filter: `ride_id=eq.${rideId}`,
       },
-      (payload) => {
-        console.log("JOURNEY TRACKING REALTIME:", payload.eventType);
 
-        if (payload.new) {
-          onTrackingUpdate(payload.new as JourneyTrackingState);
-        }
+      () => {
+        console.log("Journey tracking updated");
+
+        onChange();
       },
     )
-    .subscribe((status) => {
-      console.log("Journey Tracking Realtime:", status);
-    });
-
-  return channel;
-}
-
-export function subscribeToRideSafetyEvents(
-  rideId: string,
-  onNewEvent: (event: any) => void,
-) {
-  const channel = supabase
-    .channel(`journey-events-${rideId}`)
     .on(
       "postgres_changes",
+
       {
-        event: "INSERT",
+        event: "*",
+
         schema: "public",
-        table: "ride_safety_events",
+
+        table: "bookings",
+
         filter: `ride_id=eq.${rideId}`,
       },
-      (payload) => {
-        console.log("JOURNEY EVENT:", payload.new);
 
-        onNewEvent(payload.new);
+      () => {
+        console.log("Journey booking updated");
+
+        onChange();
+      },
+    )
+    .on(
+      "postgres_changes",
+
+      {
+        event: "*",
+
+        schema: "public",
+
+        table: "rides",
+
+        filter: `id=eq.${rideId}`,
+      },
+
+      () => {
+        /*
+         * Ride status may have changed.
+         *
+         * Remove cached route metadata so the
+         * next tracking action reloads status.
+         */
+
+        journeyRouteCache.delete(rideId);
+
+        console.log("Journey ride updated");
+
+        onChange();
       },
     )
     .subscribe((status) => {
-      console.log("Journey Events Realtime:", status);
+      console.log("Journey Realtime:", status);
     });
 
   return channel;
 }
 
-export async function removeJourneyChannel(channel: any) {
+export async function removeJourneySubscription(channel: any) {
   if (!channel) {
     return;
   }

@@ -1,303 +1,319 @@
-import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { Feather, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { router, useLocalSearchParams } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+
 import {
   ActivityIndicator,
-  FlatList,
+  Alert,
+  Animated,
+  Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 
+import { colors, radius, shadow, spacing, typography } from "@/constants/theme";
+
 import {
-  getRideSafetyEvents,
-  getRideTracking,
-  JourneyTrackingState,
-  removeJourneyChannel,
-  subscribeToRideSafetyEvents,
-  subscribeToRideTracking,
-} from "../../../services/journey-tracking.service";
+  isDriverTrackingRide,
+  startDriverLocationTracking,
+  stopDriverLocationTracking,
+} from "@/services/driver-location.service";
 
-import { supabase } from "../../../services/supabase";
+import {
+  getJourneyData,
+  getTrustedContactCount,
+  removeJourneySubscription,
+  subscribeToJourney,
+} from "@/services/journey.service";
 
-import { colors, radius, spacing, typography } from "../../../constants/theme";
+function clampProgress(value: any) {
+  const progress = Number(value || 0);
 
-type SafetyEvent = {
-  id: string;
+  return Math.min(100, Math.max(0, progress));
+}
 
-  ride_id: string;
+function formatStatus(status: string) {
+  return status
+    ?.replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
-  passenger_id: string | null;
+function PressScale({
+  children,
+  onPress,
+  style,
+}: {
+  children: React.ReactNode;
+  onPress?: () => void;
+  style?: any;
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
 
-  event_type: string;
+  const pressIn = () => {
+    Animated.spring(scale, {
+      toValue: 0.97,
+      speed: 45,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  };
 
-  progress_percentage: number | null;
+  const pressOut = () => {
+    Animated.spring(scale, {
+      toValue: 1,
+      speed: 45,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  };
 
-  lat: number | null;
+  return (
+    <Pressable onPress={onPress} onPressIn={pressIn} onPressOut={pressOut}>
+      <Animated.View
+        style={[
+          style,
+          {
+            transform: [{ scale }],
+          },
+        ]}
+      >
+        {children}
+      </Animated.View>
+    </Pressable>
+  );
+}
 
-  lng: number | null;
+function SectionTitle({ icon, title }: { icon: any; title: string }) {
+  return (
+    <View style={styles.sectionTitleRow}>
+      <Ionicons name={icon} size={17} color={colors.primary} />
 
-  created_at: string;
-};
+      <Text style={styles.sectionTitle}>{title}</Text>
+    </View>
+  );
+}
 
-export default function JourneyProgressScreen() {
-  const { rideId } = useLocalSearchParams<{
-    rideId: string;
-  }>();
+export default function JourneyScreen() {
+  const params = useLocalSearchParams();
 
-  const [tracking, setTracking] = useState<JourneyTrackingState | null>(null);
+  const rideId = String(params.rideId);
 
-  const [events, setEvents] = useState<SafetyEvent[]>([]);
-
-  const [ride, setRide] = useState<any>(null);
+  const [journey, setJourney] = useState<any>(null);
 
   const [loading, setLoading] = useState(true);
 
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (!rideId) {
+  const [driverTrackingActive, setDriverTrackingActive] = useState(false);
+
+  const [trustedContactCount, setTrustedContactCount] = useState(0);
+
+  const fade = useRef(new Animated.Value(0)).current;
+
+  const slide = useRef(new Animated.Value(18)).current;
+
+  const startAutomaticDriverTracking = async () => {
+    if (!journey || journey.role !== "driver") {
       return;
     }
 
-    loadJourney();
+    const result = await startDriverLocationTracking({
+      rideId,
 
-    const trackingChannel = subscribeToRideTracking(rideId, (newTracking) => {
-      setTracking(newTracking);
+      trackingMode: "normal",
     });
 
-    const eventChannel = subscribeToRideSafetyEvents(rideId, (newEvent) => {
-      setEvents((currentEvents) => {
-        const alreadyExists = currentEvents.some(
-          (event) => event.id === newEvent.id,
-        );
+    if (result.error) {
+      console.log("AUTO DRIVER TRACKING ERROR:", result.error);
 
-        if (alreadyExists) {
-          return currentEvents;
-        }
+      Alert.alert(
+        "Tracking Error",
 
-        return [...currentEvents, newEvent];
-      });
-    });
+        result.error instanceof Error
+          ? result.error.message
+          : "Unable to start journey tracking",
+      );
 
-    return () => {
-      removeJourneyChannel(trackingChannel);
-
-      removeJourneyChannel(eventChannel);
-    };
-  }, [rideId]);
-
-  const loadJourney = async () => {
-    if (!rideId) {
       return;
     }
 
-    try {
-      const [trackingResponse, eventsResponse, rideResponse] =
-        await Promise.all([
-          getRideTracking(rideId),
+    setDriverTrackingActive(true);
 
-          getRideSafetyEvents(rideId),
+    Alert.alert(
+      "Journey Tracking Active",
 
-          supabase
-            .from("rides")
-            .select(
-              `
-            id,
-            source,
-            destination,
-            ride_status,
-            ride_date,
-            ride_time,
-            started_at,
-            driver_id,
-            women_only
-          `,
-            )
-            .eq("id", rideId)
-            .single(),
-        ]);
+      "Your route progress is now being tracked automatically.",
+    );
+  };
 
-      if (trackingResponse.error) {
-        console.log("TRACKING LOAD ERROR:", trackingResponse.error);
+  const stopAutomaticDriverTracking = async () => {
+    await stopDriverLocationTracking();
+
+    setDriverTrackingActive(false);
+  };
+
+  const loadJourney = useCallback(
+    async (showLoader = false) => {
+      if (showLoader) {
+        setLoading(true);
       }
 
-      if (eventsResponse.error) {
-        console.log("EVENT LOAD ERROR:", eventsResponse.error);
+      const { data, error } = await getJourneyData(rideId);
+
+      if (error) {
+        console.log("LOAD JOURNEY ERROR:", error);
+
+        Alert.alert("Unable to load journey", error.message);
+
+        setLoading(false);
+
+        setRefreshing(false);
+
+        return;
       }
 
-      if (rideResponse.error) {
-        console.log("RIDE LOAD ERROR:", rideResponse.error);
+      setJourney(data);
+
+      if (data?.role === "driver") {
+        setDriverTrackingActive(isDriverTrackingRide(rideId));
       }
 
-      setTracking(trackingResponse.data || null);
+      if (data?.role === "passenger") {
+        const { count } = await getTrustedContactCount();
 
-      setEvents((eventsResponse.data || []) as SafetyEvent[]);
+        setTrustedContactCount(count);
+      }
 
-      setRide(rideResponse.data || null);
-    } finally {
       setLoading(false);
 
       setRefreshing(false);
-    }
-  };
+    },
 
-  const refreshJourney = async () => {
+    [rideId],
+  );
+
+  useEffect(() => {
+    loadJourney(true);
+
+    Animated.parallel([
+      Animated.timing(fade, {
+        toValue: 1,
+
+        duration: 420,
+
+        useNativeDriver: true,
+      }),
+
+      Animated.timing(slide, {
+        toValue: 0,
+
+        duration: 420,
+
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    const channel = subscribeToJourney(
+      rideId,
+
+      () => {
+        loadJourney(false);
+      },
+    );
+
+    return () => {
+      removeJourneySubscription(channel);
+    };
+  }, [rideId]);
+
+  const onRefresh = () => {
     setRefreshing(true);
 
-    await loadJourney();
+    loadJourney(false);
   };
 
-  const progress = useMemo(() => {
-    const value = Number(tracking?.progress_percentage || 0);
+  const openPassengerProfile = (passengerId: string) => {
+    router.push({
+      pathname: "/profile/[id]" as any,
 
-    return Math.min(Math.max(value, 0), 100);
-  }, [tracking?.progress_percentage]);
+      params: {
+        id: passengerId,
 
-  const getTrackingModeDetails = () => {
-    if (tracking?.tracking_mode === "emergency") {
-      return {
-        title: "Emergency Tracking",
-
-        subtitle: "High-frequency emergency tracking is active.",
-
-        icon: "warning" as const,
-
-        backgroundColor: "#FEF2F2",
-
-        iconColor: "#DC2626",
-      };
-    }
-
-    if (tracking?.tracking_mode === "safety") {
-      return {
-        title: "Safety Mode Active",
-
-        subtitle: "Enhanced journey tracking is active for this ride.",
-
-        icon: "shield-checkmark" as const,
-
-        backgroundColor: "#FDF2F8",
-
-        iconColor: "#BE185D",
-      };
-    }
-
-    return {
-      title: "Journey Tracking Active",
-
-      subtitle: "Adaptive journey progress tracking is active.",
-
-      icon: "navigate" as const,
-
-      backgroundColor: "#EFF6FF",
-
-      iconColor: colors.primary,
-    };
+        viewAs: "passenger",
+      },
+    });
   };
 
-  const getEventDetails = (eventType: string) => {
-    switch (eventType) {
-      case "ride_started":
-        return {
-          title: "Journey started",
+  const openDriverProfile = () => {
+    router.push({
+      pathname: "/profile/[id]" as any,
 
-          icon: "car-sport" as const,
-        };
+      params: {
+        id: journey.ride.driver_id,
 
-      case "checkpoint_25":
-        return {
-          title: "25% journey completed",
-
-          icon: "flag" as const,
-        };
-
-      case "checkpoint_50":
-        return {
-          title: "Halfway checkpoint reached",
-
-          icon: "flag" as const,
-        };
-
-      case "checkpoint_75":
-        return {
-          title: "75% journey completed",
-
-          icon: "flag" as const,
-        };
-
-      case "near_destination":
-        return {
-          title: "Approaching destination",
-
-          icon: "location" as const,
-        };
-
-      case "destination_reached":
-        return {
-          title: "Destination reached",
-
-          icon: "checkmark-circle" as const,
-        };
-
-      case "route_deviation":
-        return {
-          title: "Route deviation detected",
-
-          icon: "warning" as const,
-        };
-
-      case "tracking_lost":
-        return {
-          title: "Journey tracking interrupted",
-
-          icon: "cloud-offline" as const,
-        };
-
-      case "sos":
-        return {
-          title: "Emergency SOS triggered",
-
-          icon: "alert-circle" as const,
-        };
-
-      default:
-        return {
-          title: eventType.replaceAll("_", " "),
-
-          icon: "ellipse" as const,
-        };
-    }
+        viewAs: "driver",
+      },
+    });
   };
 
-  const formatLastUpdate = (value?: string) => {
-    if (!value) {
-      return "Waiting for location";
+  const openSafetyMode = () => {
+    if (!journey.booking) {
+      return;
     }
 
-    const difference = Date.now() - new Date(value).getTime();
+    router.push({
+      pathname: "/safety/[bookingId]",
 
-    const seconds = Math.floor(difference / 1000);
+      params: {
+        bookingId: journey.booking.id,
+      },
+    });
+  };
 
-    if (seconds < 60) {
-      return "Updated just now";
+  const triggerSOS = () => {
+    if (!journey.booking) {
+      return;
     }
 
-    const minutes = Math.floor(seconds / 60);
+    Alert.alert(
+      "Emergency SOS",
 
-    if (minutes < 60) {
-      return `Updated ${minutes} min ago`;
-    }
+      "Trigger SOS and notify your trusted contacts?",
 
-    const hours = Math.floor(minutes / 60);
+      [
+        {
+          text: "Cancel",
 
-    return `Updated ${hours} hr ago`;
+          style: "cancel",
+        },
+
+        {
+          text: "Trigger SOS",
+
+          style: "destructive",
+
+          onPress: async () => {
+            router.push({
+              pathname: "/safety/[bookingId]",
+
+              params: {
+                bookingId: journey.booking.id,
+
+                openSOS: "true",
+              },
+            });
+          },
+        },
+      ],
+    );
   };
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={styles.centered}>
         <ActivityIndicator size="large" color={colors.primary} />
 
         <Text style={styles.loadingText}>Loading journey...</Text>
@@ -305,192 +321,684 @@ export default function JourneyProgressScreen() {
     );
   }
 
-  const modeDetails = getTrackingModeDetails();
+  if (!journey) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons
+          name="navigate-circle-outline"
+          size={54}
+          color={colors.textMuted}
+        />
+
+        <Text style={styles.emptyTitle}>Journey unavailable</Text>
+      </View>
+    );
+  }
+
+  const {
+    role,
+
+    ride,
+
+    booking,
+
+    passengers,
+
+    driver,
+
+    vehicle,
+
+    tracking,
+  } = journey;
+
+  const isDriver = role === "driver";
+
+  const progress = clampProgress(tracking?.progress_percentage);
+
+  const rideDistance = Number(ride.route_distance_km || 0);
+
+  const remainingDistance = Number(
+    tracking?.distance_to_destination_km ?? rideDistance,
+  );
+
+  const travelledDistance = Math.max(
+    0,
+
+    rideDistance - remainingDistance,
+  );
+
+  const passengerPickupProgress = Number(booking?.pickup_route_progress || 0);
+
+  const passengerDropProgress = Number(booking?.drop_route_progress || 100);
+
+  const passengerProgressRange =
+    passengerDropProgress - passengerPickupProgress;
+
+  const passengerJourneyProgress =
+    passengerProgressRange > 0
+      ? clampProgress(
+          ((progress - passengerPickupProgress) / passengerProgressRange) * 100,
+        )
+      : progress;
+
+  const displayProgress = isDriver ? progress : passengerJourneyProgress;
+
+  const passengerPickup = booking?.pickup_name || ride.source;
+
+  const passengerDrop = booking?.drop_name || ride.destination;
+
+  const routeSource = isDriver ? ride.source : passengerPickup;
+
+  const routeDestination = isDriver ? ride.destination : passengerDrop;
+
+  const nextPassenger = passengers?.find(
+    (passenger: any) =>
+      !passenger.boarding_verified &&
+      Number(passenger.pickup_route_progress || 0) >= progress,
+  );
+
+  const safetyActive = tracking?.tracking_mode === "safety";
 
   return (
-    <FlatList
-      style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      data={events}
-      keyExtractor={(item) => item.id}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={refreshJourney} />
-      }
-      ListHeaderComponent={
-        <>
-          <Text style={styles.title}>Journey Progress</Text>
+    <Animated.View
+      style={[
+        styles.screen,
 
-          <Text style={styles.subtitle}>Live adaptive journey updates</Text>
+        {
+          opacity: fade,
 
-          <View style={styles.routeCard}>
-            <View style={styles.routePoint}>
-              <View style={styles.sourceDot} />
+          transform: [
+            {
+              translateY: slide,
+            },
+          ],
+        },
+      ]}
+    >
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.eyebrow}>
+              {isDriver ? "DRIVER JOURNEY" : "MY JOURNEY"}
+            </Text>
 
-              <View style={styles.routeTextContainer}>
-                <Text style={styles.routeLabel}>FROM</Text>
+            <Text style={styles.title}>Journey in progress</Text>
+          </View>
 
-                <Text style={styles.routeText}>{ride?.source || "Source"}</Text>
-              </View>
+          <View style={styles.liveBadge}>
+            <View style={styles.liveDot} />
+
+            <Text style={styles.liveText}>LIVE</Text>
+          </View>
+        </View>
+
+        <View style={styles.heroCard}>
+          <View style={styles.routeRow}>
+            <View style={styles.routeVisual}>
+              <View style={[styles.routeDot, styles.pickupDot]} />
+
+              <View style={styles.routeLine} />
+
+              <View style={[styles.routeDot, styles.dropDot]} />
             </View>
 
-            <View style={styles.routeConnector} />
+            <View style={styles.routeContent}>
+              <View>
+                <Text style={styles.routeLabel}>
+                  {isDriver ? "START" : "YOUR PICKUP"}
+                </Text>
 
-            <View style={styles.routePoint}>
-              <Ionicons name="location" size={19} color={colors.danger} />
+                <Text style={styles.routeName} numberOfLines={2}>
+                  {routeSource}
+                </Text>
+              </View>
 
-              <View style={styles.routeTextContainer}>
-                <Text style={styles.routeLabel}>TO</Text>
+              <View style={styles.routeGap} />
 
-                <Text style={styles.routeText}>
-                  {ride?.destination || "Destination"}
+              <View>
+                <Text style={styles.routeLabel}>
+                  {isDriver ? "DESTINATION" : "YOUR DROP"}
+                </Text>
+
+                <Text style={styles.routeName} numberOfLines={2}>
+                  {routeDestination}
                 </Text>
               </View>
             </View>
           </View>
 
-          <View
-            style={[
-              styles.modeCard,
+          <View style={styles.progressHeader}>
+            <Text style={styles.progressLabel}>Journey progress</Text>
 
-              {
-                backgroundColor: modeDetails.backgroundColor,
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.modeIcon,
-
-                {
-                  backgroundColor: modeDetails.iconColor,
-                },
-              ]}
-            >
-              <Ionicons name={modeDetails.icon} size={22} color="#FFFFFF" />
-            </View>
-
-            <View style={styles.modeContent}>
-              <Text style={styles.modeTitle}>{modeDetails.title}</Text>
-
-              <Text style={styles.modeSubtitle}>{modeDetails.subtitle}</Text>
-            </View>
+            <Text style={styles.progressValue}>
+              {Math.round(displayProgress)}%
+            </Text>
           </View>
 
-          <View style={styles.progressCard}>
-            <View style={styles.progressHeader}>
-              <Text style={styles.progressTitle}>Journey progress</Text>
+          <View style={styles.progressTrack}>
+            <Animated.View
+              style={[
+                styles.progressFill,
 
-              <Text style={styles.progressValue}>{Math.round(progress)}%</Text>
+                {
+                  width: `${displayProgress}%` as any,
+                },
+              ]}
+            />
+          </View>
+
+          <View style={styles.distanceRow}>
+            <View style={styles.distanceItem}>
+              <Text style={styles.distanceValue}>
+                {travelledDistance.toFixed(1)}
+              </Text>
+
+              <Text style={styles.distanceLabel}>km travelled</Text>
             </View>
 
-            <View style={styles.progressTrack}>
+            <View style={styles.distanceDivider} />
+
+            <View style={styles.distanceItem}>
+              <Text style={styles.distanceValue}>
+                {remainingDistance.toFixed(1)}
+              </Text>
+
+              <Text style={styles.distanceLabel}>km remaining</Text>
+            </View>
+          </View>
+        </View>
+
+        {!isDriver &&
+          booking &&
+          !booking.boarding_verified &&
+          booking.boarding_pin && (
+            <View style={styles.boardingPinCard}>
+              <View style={styles.boardingPinIcon}>
+                <Ionicons
+                  name="keypad-outline"
+                  size={23}
+                  color={colors.primary}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.boardingPinLabel}>YOUR BOARDING PIN</Text>
+
+                <Text style={styles.boardingPinValue}>
+                  {booking.boarding_pin}
+                </Text>
+
+                <Text style={styles.boardingPinHint}>
+                  Share this PIN with the driver only after entering the vehicle
+                </Text>
+              </View>
+            </View>
+          )}
+
+        {isDriver && nextPassenger && (
+          <View style={styles.card}>
+            <SectionTitle icon="location-outline" title="Next passenger stop" />
+
+            <View style={styles.nextStopRow}>
+              <View style={styles.nextStopIcon}>
+                <Ionicons
+                  name="person-add-outline"
+                  size={22}
+                  color={colors.primary}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.nextStopLabel}>PICKUP</Text>
+
+                <Text style={styles.nextStopName} numberOfLines={2}>
+                  {nextPassenger.pickup_name || ride.source}
+                </Text>
+
+                <Text style={styles.nextStopPassenger}>
+                  {nextPassenger.profiles?.full_name || "Passenger"} •{" "}
+                  {nextPassenger.seats_booked} seat
+                  {Number(nextPassenger.seats_booked) > 1 ? "s" : ""}
+                </Text>
+              </View>
+
+              <View style={styles.progressPill}>
+                <Text style={styles.progressPillText}>
+                  {Math.round(Number(nextPassenger.pickup_route_progress || 0))}
+                  %
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {!isDriver && (
+          <View style={styles.card}>
+            <SectionTitle icon="shield-checkmark-outline" title="Ride safety" />
+
+            <View
+              style={[
+                styles.safetyStatus,
+
+                safetyActive && styles.safetyStatusActive,
+              ]}
+            >
+              <View style={styles.safetyIcon}>
+                <Ionicons
+                  name={safetyActive ? "shield-checkmark" : "shield-outline"}
+                  size={24}
+                  color={safetyActive ? colors.success : colors.textMuted}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.safetyTitle}>
+                  {safetyActive
+                    ? "Safety tracking active"
+                    : "Journey monitoring active"}
+                </Text>
+
+                <Text style={styles.safetySubtitle}>
+                  {trustedContactCount} trusted contact
+                  {trustedContactCount !== 1 ? "s" : ""} connected
+                </Text>
+              </View>
+
               <View
                 style={[
-                  styles.progressFill,
+                  styles.statusDot,
 
                   {
-                    width: `${progress}%`,
+                    backgroundColor: tracking?.route_deviation
+                      ? colors.danger
+                      : colors.success,
                   },
                 ]}
               />
             </View>
 
-            <View style={styles.statsRow}>
-              <View style={styles.statItem}>
-                <Ionicons
-                  name="navigate-outline"
-                  size={18}
-                  color={colors.primary}
-                />
+            <View style={styles.safetyMetaRow}>
+              <Ionicons
+                name={
+                  tracking?.route_deviation
+                    ? "warning-outline"
+                    : "checkmark-circle-outline"
+                }
+                size={17}
+                color={
+                  tracking?.route_deviation ? colors.danger : colors.success
+                }
+              />
 
-                <Text style={styles.statValue}>
-                  {tracking?.distance_to_destination_km != null
-                    ? `${Number(tracking.distance_to_destination_km).toFixed(
-                        1,
-                      )} km`
-                    : "--"}
-                </Text>
+              <Text
+                style={[
+                  styles.safetyMetaText,
 
-                <Text style={styles.statLabel}>Remaining</Text>
-              </View>
-
-              <View style={styles.statDivider} />
-
-              <View style={styles.statItem}>
-                <Ionicons
-                  name="time-outline"
-                  size={18}
-                  color={colors.primary}
-                />
-
-                <Text style={styles.statValue}>
-                  {formatLastUpdate(tracking?.last_location_at)}
-                </Text>
-
-                <Text style={styles.statLabel}>Last sync</Text>
-              </View>
+                  tracking?.route_deviation && {
+                    color: colors.danger,
+                  },
+                ]}
+              >
+                {tracking?.route_deviation
+                  ? "Possible route deviation detected"
+                  : "No route deviation detected"}
+              </Text>
             </View>
+
+            <PressScale onPress={openSafetyMode} style={styles.safetyButton}>
+              <Ionicons
+                name="shield-checkmark"
+                size={18}
+                color={colors.primary}
+              />
+
+              <Text style={styles.safetyButtonText}>Open Safety Mode</Text>
+
+              <Ionicons
+                name="chevron-forward"
+                size={17}
+                color={colors.primary}
+              />
+            </PressScale>
           </View>
+        )}
 
-          <Text style={styles.sectionTitle}>Journey timeline</Text>
-        </>
-      }
-      renderItem={({ item, index }) => {
-        const eventDetails = getEventDetails(item.event_type);
+        {!isDriver && (
+          <PressScale onPress={openDriverProfile} style={styles.card}>
+            <SectionTitle icon="person-outline" title="Driver" />
 
-        const isLast = index === events.length - 1;
-
-        return (
-          <View style={styles.timelineItem}>
-            <View style={styles.timelineLeft}>
-              <View style={styles.timelineIcon}>
-                <Ionicons
-                  name={eventDetails.icon}
-                  size={17}
-                  color={colors.primary}
-                />
+            <View style={styles.personRow}>
+              <View style={styles.avatar}>
+                <Ionicons name="person" size={24} color={colors.primary} />
               </View>
 
-              {!isLast && <View style={styles.timelineLine} />}
+              <View style={{ flex: 1 }}>
+                <View style={styles.nameRow}>
+                  <Text style={styles.personName}>
+                    {driver?.full_name || "Driver"}
+                  </Text>
+
+                  {driver?.driver_verification_status === "approved" && (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={17}
+                      color={colors.success}
+                    />
+                  )}
+                </View>
+
+                <Text style={styles.personMeta}>Verified driver</Text>
+
+                {vehicle && (
+                  <Text style={styles.vehicleText}>
+                    {vehicle.vehicle_name} • {vehicle.vehicle_number}
+                  </Text>
+                )}
+              </View>
+
+              <Ionicons
+                name="chevron-forward"
+                size={19}
+                color={colors.textMuted}
+              />
+            </View>
+          </PressScale>
+        )}
+
+        {isDriver && (
+          <View style={styles.card}>
+            <SectionTitle
+              icon="people-outline"
+              title={`Passengers · ${passengers?.length || 0}`}
+            />
+
+            {passengers?.length === 0 ? (
+              <View style={styles.noPassengers}>
+                <Ionicons
+                  name="people-outline"
+                  size={28}
+                  color={colors.textMuted}
+                />
+
+                <Text style={styles.noPassengersText}>
+                  No passengers on this journey
+                </Text>
+              </View>
+            ) : (
+              passengers.map((passenger: any, index: number) => {
+                const boarded = passenger.boarding_verified;
+
+                const pickupProgress = Number(
+                  passenger.pickup_route_progress || 0,
+                );
+
+                const dropProgress = Number(
+                  passenger.drop_route_progress || 100,
+                );
+
+                const dropped = progress >= dropProgress;
+
+                const upcoming = progress < pickupProgress;
+
+                let status = "Travelling";
+
+                if (dropped) {
+                  status = "Drop reached";
+                } else if (upcoming) {
+                  status = "Waiting for pickup";
+                } else if (!boarded) {
+                  status = "Boarding pending";
+                }
+
+                return (
+                  <PressScale
+                    key={passenger.id}
+                    onPress={() => {
+                      if (!passenger.boarding_verified) {
+                        router.push({
+                          pathname: "/journey/boarding/[bookingId]" as any,
+
+                          params: {
+                            bookingId: passenger.id,
+                          },
+                        });
+
+                        return;
+                      }
+
+                      openPassengerProfile(passenger.passenger_id);
+                    }}
+                    style={[
+                      styles.passengerCard,
+
+                      index > 0 && {
+                        marginTop: spacing.sm,
+                      },
+                    ]}
+                  >
+                    <View style={styles.passengerTop}>
+                      <View style={styles.passengerAvatar}>
+                        <Ionicons
+                          name="person"
+                          size={20}
+                          color={colors.primary}
+                        />
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.passengerName}>
+                          {passenger.profiles?.full_name || "Passenger"}
+                        </Text>
+
+                        <Text style={styles.passengerSeats}>
+                          {passenger.seats_booked} seat
+                          {Number(passenger.seats_booked) > 1 ? "s" : ""}
+                        </Text>
+                      </View>
+
+                      <View
+                        style={[
+                          styles.passengerStatus,
+
+                          boarded && styles.passengerStatusActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.passengerStatusText,
+
+                            boarded && {
+                              color: colors.success,
+                            },
+                          ]}
+                        >
+                          {status}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.passengerRoute}>
+                      <View style={styles.smallRouteDot} />
+
+                      <Text style={styles.passengerRouteText} numberOfLines={1}>
+                        {passenger.pickup_name || ride.source}
+                      </Text>
+
+                      <Ionicons
+                        name="arrow-forward"
+                        size={13}
+                        color={colors.textMuted}
+                      />
+
+                      <Text style={styles.passengerRouteText} numberOfLines={1}>
+                        {passenger.drop_name || ride.destination}
+                      </Text>
+                    </View>
+
+                    <View style={styles.segmentProgressRow}>
+                      <Text style={styles.segmentProgressText}>
+                        {Math.round(pickupProgress)}%
+                      </Text>
+
+                      <View style={styles.segmentLine} />
+
+                      <Text style={styles.segmentProgressText}>
+                        {Math.round(dropProgress)}%
+                      </Text>
+                    </View>
+                    {!passenger.boarding_verified && (
+                      <View style={styles.verifyPassengerRow}>
+                        <Ionicons
+                          name="keypad-outline"
+                          size={16}
+                          color={colors.primary}
+                        />
+
+                        <Text style={styles.verifyPassengerText}>
+                          Tap to verify boarding PIN
+                        </Text>
+
+                        <Ionicons
+                          name="chevron-forward"
+                          size={16}
+                          color={colors.primary}
+                        />
+                      </View>
+                    )}
+
+                    {passenger.boarding_verified && (
+                      <View style={styles.boardedPassengerRow}>
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={16}
+                          color={colors.success}
+                        />
+
+                        <Text style={styles.boardedPassengerText}>
+                          Passenger boarded
+                        </Text>
+                      </View>
+                    )}
+                  </PressScale>
+                );
+              })
+            )}
+          </View>
+        )}
+
+        <View style={styles.card}>
+          <SectionTitle icon="pulse-outline" title="Ride status" />
+
+          <View style={styles.statusRow}>
+            <View style={styles.statusIcon}>
+              <Ionicons name="radio" size={18} color={colors.success} />
             </View>
 
-            <View style={styles.timelineContent}>
-              <Text style={styles.timelineTitle}>{eventDetails.title}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statusTitle}>
+                {formatStatus(ride.ride_status)}
+              </Text>
 
-              <Text style={styles.timelineTime}>
-                {new Date(item.created_at).toLocaleString()}
+              <Text style={styles.statusSubtitle}>
+                Last location update{" "}
+                {tracking?.last_location_at
+                  ? new Date(tracking.last_location_at).toLocaleTimeString()
+                  : "unavailable"}
               </Text>
             </View>
           </View>
-        );
-      }}
-      ListEmptyComponent={
-        <View style={styles.emptyTimeline}>
-          <Text style={styles.emptyTimelineText}>
-            Waiting for journey events...
-          </Text>
+
+          <View style={styles.trackingInfo}>
+            <View style={styles.trackingItem}>
+              <MaterialCommunityIcons
+                name="crosshairs-gps"
+                size={18}
+                color={colors.primary}
+              />
+
+              <Text style={styles.trackingValue}>
+                {tracking?.tracking_mode || "normal"}
+              </Text>
+
+              <Text style={styles.trackingLabel}>Tracking</Text>
+            </View>
+
+            <View style={styles.trackingItem}>
+              <Ionicons name="flag-outline" size={18} color={colors.primary} />
+
+              <Text style={styles.trackingValue}>
+                {tracking?.last_checkpoint ?? 0}
+              </Text>
+
+              <Text style={styles.trackingLabel}>Checkpoint</Text>
+            </View>
+
+            <View style={styles.trackingItem}>
+              <Feather name="navigation" size={17} color={colors.primary} />
+
+              <Text style={styles.trackingValue}>{Math.round(progress)}%</Text>
+
+              <Text style={styles.trackingLabel}>Route</Text>
+            </View>
+          </View>
         </View>
-      }
-    />
+
+        {!isDriver && (
+          <PressScale onPress={triggerSOS} style={styles.sosButton}>
+            <View style={styles.sosIcon}>
+              <MaterialCommunityIcons
+                name="alarm-light"
+                size={24}
+                color="#FFFFFF"
+              />
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sosTitle}>SOS Emergency</Text>
+
+              <Text style={styles.sosSubtitle}>
+                Alert trusted contacts and share journey status
+              </Text>
+            </View>
+
+            <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
+          </PressScale>
+        )}
+
+        <Text style={styles.footerText}>
+          Journey updates are synced automatically
+        </Text>
+      </ScrollView>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
 
     backgroundColor: colors.surfaceMuted,
   },
 
-  contentContainer: {
-    paddingHorizontal: spacing.md,
+  content: {
+    padding: spacing.md,
 
     paddingTop: spacing.xl,
 
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.xl * 2,
   },
 
-  loadingContainer: {
+  centered: {
     flex: 1,
 
     alignItems: "center",
@@ -498,27 +1006,93 @@ const styles = StyleSheet.create({
     justifyContent: "center",
 
     backgroundColor: colors.surfaceMuted,
+
+    padding: spacing.xl,
   },
 
   loadingText: {
     marginTop: spacing.sm,
 
-    color: colors.textSecondary,
+    color: colors.textMuted,
+
+    fontSize: 13,
   },
 
-  title: {
-    ...typography.title,
+  emptyTitle: {
+    marginTop: spacing.md,
+
+    fontSize: 18,
+
+    fontWeight: "800",
+
+    color: colors.textPrimary,
   },
 
-  subtitle: {
-    ...typography.subtitle,
+  header: {
+    flexDirection: "row",
 
-    marginTop: 4,
+    alignItems: "center",
+
+    justifyContent: "space-between",
 
     marginBottom: spacing.lg,
   },
 
-  routeCard: {
+  eyebrow: {
+    fontSize: 10,
+
+    fontWeight: "800",
+
+    color: colors.primary,
+
+    letterSpacing: 1.2,
+  },
+
+  title: {
+    ...typography.title,
+
+    fontSize: 25,
+
+    marginTop: 3,
+  },
+
+  liveBadge: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: 6,
+
+    backgroundColor: colors.successLight,
+
+    paddingHorizontal: 10,
+
+    paddingVertical: 7,
+
+    borderRadius: radius.full,
+  },
+
+  liveDot: {
+    width: 7,
+
+    height: 7,
+
+    borderRadius: 4,
+
+    backgroundColor: colors.success,
+  },
+
+  liveText: {
+    fontSize: 10,
+
+    fontWeight: "900",
+
+    color: colors.success,
+
+    letterSpacing: 0.7,
+  },
+
+  heroCard: {
     backgroundColor: colors.surface,
 
     borderRadius: radius.lg,
@@ -527,153 +1101,107 @@ const styles = StyleSheet.create({
 
     borderColor: colors.border,
 
-    padding: spacing.md,
+    padding: spacing.lg,
+
+    marginBottom: spacing.md,
+
+    ...shadow.card,
   },
 
-  routePoint: {
+  routeRow: {
     flexDirection: "row",
+  },
+
+  routeVisual: {
+    width: 18,
 
     alignItems: "center",
+
+    marginRight: spacing.sm,
   },
 
-  sourceDot: {
-    width: 14,
+  routeDot: {
+    width: 11,
 
-    height: 14,
+    height: 11,
 
-    borderRadius: 7,
-
-    borderWidth: 3,
-
-    borderColor: colors.primary,
+    borderRadius: 6,
   },
 
-  routeTextContainer: {
-    marginLeft: spacing.md,
+  pickupDot: {
+    backgroundColor: colors.primary,
+  },
 
+  dropDot: {
+    backgroundColor: colors.danger,
+  },
+
+  routeLine: {
+    width: 2,
+
+    flex: 1,
+
+    minHeight: 43,
+
+    backgroundColor: colors.border,
+
+    marginVertical: 4,
+  },
+
+  routeContent: {
     flex: 1,
   },
 
-  routeLabel: {
-    fontSize: 10,
+  routeGap: {
+    height: 17,
+  },
 
-    fontWeight: "700",
+  routeLabel: {
+    fontSize: 9,
+
+    fontWeight: "800",
 
     color: colors.textMuted,
 
-    letterSpacing: 1,
+    letterSpacing: 0.8,
   },
 
-  routeText: {
+  routeName: {
     fontSize: 16,
 
-    fontWeight: "700",
+    fontWeight: "800",
 
     color: colors.textPrimary,
 
     marginTop: 2,
   },
 
-  routeConnector: {
-    width: 2,
-
-    height: 28,
-
-    backgroundColor: colors.border,
-
-    marginLeft: 6,
-
-    marginVertical: 3,
-  },
-
-  modeCard: {
-    flexDirection: "row",
-
-    alignItems: "center",
-
-    borderRadius: radius.lg,
-
-    padding: spacing.md,
-
-    marginTop: spacing.md,
-  },
-
-  modeIcon: {
-    width: 46,
-
-    height: 46,
-
-    borderRadius: 23,
-
-    alignItems: "center",
-
-    justifyContent: "center",
-  },
-
-  modeContent: {
-    flex: 1,
-
-    marginLeft: spacing.md,
-  },
-
-  modeTitle: {
-    fontSize: 16,
-
-    fontWeight: "700",
-
-    color: colors.textPrimary,
-  },
-
-  modeSubtitle: {
-    fontSize: 12,
-
-    color: colors.textSecondary,
-
-    lineHeight: 18,
-
-    marginTop: 3,
-  },
-
-  progressCard: {
-    backgroundColor: colors.surface,
-
-    borderRadius: radius.lg,
-
-    borderWidth: 1,
-
-    borderColor: colors.border,
-
-    padding: spacing.md,
-
-    marginTop: spacing.md,
-  },
-
   progressHeader: {
     flexDirection: "row",
 
-    alignItems: "center",
-
     justifyContent: "space-between",
+
+    marginTop: spacing.lg,
   },
 
-  progressTitle: {
-    fontSize: 14,
+  progressLabel: {
+    fontSize: 12,
 
-    fontWeight: "600",
+    fontWeight: "700",
 
     color: colors.textSecondary,
   },
 
   progressValue: {
-    fontSize: 22,
+    fontSize: 14,
 
-    fontWeight: "800",
+    fontWeight: "900",
 
     color: colors.primary,
   },
 
   progressTrack: {
-    height: 10,
+    height: 9,
 
     backgroundColor: colors.surfaceMuted,
 
@@ -681,7 +1209,7 @@ const styles = StyleSheet.create({
 
     overflow: "hidden",
 
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
   },
 
   progressFill: {
@@ -692,37 +1220,333 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
   },
 
-  statsRow: {
+  distanceRow: {
     flexDirection: "row",
 
     marginTop: spacing.lg,
   },
 
-  statItem: {
+  distanceItem: {
     flex: 1,
 
     alignItems: "center",
   },
 
-  statDivider: {
+  distanceValue: {
+    fontSize: 20,
+
+    fontWeight: "900",
+
+    color: colors.textPrimary,
+  },
+
+  distanceLabel: {
+    fontSize: 10,
+
+    color: colors.textMuted,
+
+    marginTop: 2,
+  },
+
+  distanceDivider: {
     width: 1,
 
     backgroundColor: colors.border,
   },
 
-  statValue: {
+  trackingButton: {
+    minHeight: 68,
+
+    borderRadius: radius.lg,
+
+    backgroundColor: colors.primary,
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: spacing.sm,
+
+    paddingHorizontal: spacing.md,
+
+    paddingVertical: spacing.md,
+
+    marginBottom: spacing.md,
+
+    ...shadow.card,
+  },
+
+  trackingButtonActive: {
+    backgroundColor: colors.success,
+  },
+
+  trackingButtonText: {
+    color: colors.surface,
+
+    fontSize: 14,
+
+    fontWeight: "800",
+  },
+
+  trackingButtonSubtitle: {
+    color: "rgba(255,255,255,0.78)",
+
+    fontSize: 10,
+
+    marginTop: 3,
+  },
+
+  card: {
+    backgroundColor: colors.surface,
+
+    borderRadius: radius.lg,
+
+    borderWidth: 1,
+
+    borderColor: colors.border,
+
+    padding: spacing.md,
+
+    marginBottom: spacing.md,
+
+    ...shadow.card,
+  },
+
+  sectionTitleRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: 7,
+
+    marginBottom: spacing.md,
+  },
+
+  sectionTitle: {
     fontSize: 13,
 
-    fontWeight: "700",
+    fontWeight: "800",
+
+    color: colors.textPrimary,
+  },
+
+  nextStopRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+  },
+
+  nextStopIcon: {
+    width: 46,
+
+    height: 46,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.primaryLight,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.sm,
+  },
+
+  nextStopLabel: {
+    fontSize: 9,
+
+    fontWeight: "800",
+
+    color: colors.primary,
+
+    letterSpacing: 0.8,
+  },
+
+  nextStopName: {
+    fontSize: 15,
+
+    fontWeight: "800",
 
     color: colors.textPrimary,
 
-    marginTop: 6,
-
-    textAlign: "center",
+    marginTop: 2,
   },
 
-  statLabel: {
+  nextStopPassenger: {
+    fontSize: 11,
+
+    color: colors.textSecondary,
+
+    marginTop: 3,
+  },
+
+  progressPill: {
+    backgroundColor: colors.primaryLight,
+
+    borderRadius: radius.full,
+
+    paddingHorizontal: 9,
+
+    paddingVertical: 6,
+  },
+
+  progressPillText: {
+    color: colors.primary,
+
+    fontSize: 11,
+
+    fontWeight: "800",
+  },
+
+  safetyStatus: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    backgroundColor: colors.surfaceMuted,
+
+    borderRadius: radius.md,
+
+    padding: spacing.md,
+  },
+
+  safetyStatusActive: {
+    backgroundColor: colors.successLight,
+  },
+
+  safetyIcon: {
+    width: 42,
+
+    height: 42,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.surface,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.sm,
+  },
+
+  safetyTitle: {
+    fontSize: 13,
+
+    fontWeight: "800",
+
+    color: colors.textPrimary,
+  },
+
+  safetySubtitle: {
+    fontSize: 11,
+
+    color: colors.textSecondary,
+
+    marginTop: 3,
+  },
+
+  statusDot: {
+    width: 9,
+
+    height: 9,
+
+    borderRadius: 5,
+  },
+
+  safetyMetaRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: 7,
+
+    marginTop: spacing.md,
+  },
+
+  safetyMetaText: {
+    fontSize: 12,
+
+    fontWeight: "600",
+
+    color: colors.success,
+  },
+
+  safetyButton: {
+    height: 45,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.primaryLight,
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    paddingHorizontal: spacing.md,
+
+    gap: spacing.sm,
+
+    marginTop: spacing.md,
+  },
+
+  safetyButtonText: {
+    flex: 1,
+
+    color: colors.primary,
+
+    fontSize: 13,
+
+    fontWeight: "800",
+  },
+
+  personRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+  },
+
+  avatar: {
+    width: 48,
+
+    height: 48,
+
+    borderRadius: radius.full,
+
+    backgroundColor: colors.primaryLight,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.sm,
+  },
+
+  nameRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: 5,
+  },
+
+  personName: {
+    fontSize: 15,
+
+    fontWeight: "800",
+
+    color: colors.textPrimary,
+  },
+
+  personMeta: {
+    fontSize: 11,
+
+    color: colors.textSecondary,
+
+    marginTop: 2,
+  },
+
+  vehicleText: {
     fontSize: 11,
 
     color: colors.textMuted,
@@ -730,93 +1554,393 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
 
-  sectionTitle: {
-    fontSize: 17,
-
-    fontWeight: "700",
-
-    color: colors.textPrimary,
-
-    marginTop: spacing.xl,
-
-    marginBottom: spacing.md,
-  },
-
-  timelineItem: {
-    flexDirection: "row",
-
-    minHeight: 72,
-  },
-
-  timelineLeft: {
-    width: 42,
-
-    alignItems: "center",
-  },
-
-  timelineIcon: {
-    width: 34,
-
-    height: 34,
-
-    borderRadius: 17,
-
-    backgroundColor: colors.surface,
-
-    borderWidth: 1,
-
-    borderColor: colors.border,
-
-    alignItems: "center",
-
-    justifyContent: "center",
-
-    zIndex: 2,
-  },
-
-  timelineLine: {
-    width: 2,
-
-    flex: 1,
-
-    backgroundColor: colors.border,
-  },
-
-  timelineContent: {
-    flex: 1,
-
-    paddingLeft: spacing.sm,
-
-    paddingBottom: spacing.lg,
-  },
-
-  timelineTitle: {
-    fontSize: 14,
-
-    fontWeight: "700",
-
-    color: colors.textPrimary,
-
-    marginTop: 6,
-  },
-
-  timelineTime: {
-    fontSize: 12,
-
-    color: colors.textMuted,
-
-    marginTop: 5,
-  },
-
-  emptyTimeline: {
+  noPassengers: {
     alignItems: "center",
 
     paddingVertical: spacing.lg,
   },
 
-  emptyTimelineText: {
+  noPassengersText: {
     color: colors.textMuted,
 
+    fontSize: 12,
+
+    marginTop: spacing.sm,
+  },
+
+  passengerCard: {
+    backgroundColor: colors.surfaceMuted,
+
+    borderRadius: radius.md,
+
+    padding: spacing.md,
+  },
+
+  passengerTop: {
+    flexDirection: "row",
+
+    alignItems: "center",
+  },
+
+  passengerAvatar: {
+    width: 39,
+
+    height: 39,
+
+    borderRadius: radius.full,
+
+    backgroundColor: colors.primaryLight,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.sm,
+  },
+
+  passengerName: {
     fontSize: 13,
+
+    fontWeight: "800",
+
+    color: colors.textPrimary,
+  },
+
+  passengerSeats: {
+    fontSize: 10,
+
+    color: colors.textMuted,
+
+    marginTop: 2,
+  },
+
+  passengerStatus: {
+    backgroundColor: colors.surface,
+
+    borderRadius: radius.full,
+
+    paddingHorizontal: 8,
+
+    paddingVertical: 5,
+  },
+
+  passengerStatusActive: {
+    backgroundColor: colors.successLight,
+  },
+
+  passengerStatusText: {
+    fontSize: 9,
+
+    fontWeight: "800",
+
+    color: colors.textSecondary,
+  },
+
+  passengerRoute: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: 6,
+
+    marginTop: spacing.md,
+  },
+
+  smallRouteDot: {
+    width: 7,
+
+    height: 7,
+
+    borderRadius: 4,
+
+    backgroundColor: colors.primary,
+  },
+
+  passengerRouteText: {
+    flex: 1,
+
+    fontSize: 10,
+
+    color: colors.textSecondary,
+  },
+
+  segmentProgressRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    marginTop: spacing.sm,
+  },
+
+  segmentProgressText: {
+    fontSize: 9,
+
+    fontWeight: "800",
+
+    color: colors.textMuted,
+  },
+
+  segmentLine: {
+    height: 2,
+
+    flex: 1,
+
+    backgroundColor: colors.border,
+
+    marginHorizontal: spacing.sm,
+  },
+
+  statusRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+  },
+
+  statusIcon: {
+    width: 42,
+
+    height: 42,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.successLight,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.sm,
+  },
+
+  statusTitle: {
+    fontSize: 14,
+
+    fontWeight: "800",
+
+    color: colors.textPrimary,
+  },
+
+  statusSubtitle: {
+    fontSize: 10,
+
+    color: colors.textMuted,
+
+    marginTop: 3,
+  },
+
+  trackingInfo: {
+    flexDirection: "row",
+
+    marginTop: spacing.lg,
+
+    borderTopWidth: 1,
+
+    borderTopColor: colors.border,
+
+    paddingTop: spacing.md,
+  },
+
+  trackingItem: {
+    flex: 1,
+
+    alignItems: "center",
+  },
+
+  trackingValue: {
+    fontSize: 13,
+
+    fontWeight: "800",
+
+    color: colors.textPrimary,
+
+    marginTop: 5,
+
+    textTransform: "capitalize",
+  },
+
+  trackingLabel: {
+    fontSize: 9,
+
+    color: colors.textMuted,
+
+    marginTop: 2,
+  },
+
+  sosButton: {
+    minHeight: 76,
+
+    borderRadius: radius.lg,
+
+    backgroundColor: colors.danger,
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    padding: spacing.md,
+
+    marginBottom: spacing.md,
+
+    ...shadow.card,
+  },
+
+  sosIcon: {
+    width: 46,
+
+    height: 46,
+
+    borderRadius: radius.md,
+
+    backgroundColor: "rgba(255,255,255,0.16)",
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.md,
+  },
+
+  sosTitle: {
+    color: "#FFFFFF",
+
+    fontSize: 15,
+
+    fontWeight: "900",
+  },
+
+  sosSubtitle: {
+    color: "rgba(255,255,255,0.78)",
+
+    fontSize: 10,
+
+    marginTop: 3,
+  },
+
+  footerText: {
+    textAlign: "center",
+
+    color: colors.textMuted,
+
+    fontSize: 10,
+
+    marginTop: spacing.sm,
+  },
+  verifyPassengerRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: spacing.sm,
+
+    backgroundColor: colors.primaryLight,
+
+    borderRadius: radius.md,
+
+    paddingHorizontal: spacing.md,
+
+    paddingVertical: spacing.sm,
+
+    marginTop: spacing.md,
+  },
+
+  verifyPassengerText: {
+    flex: 1,
+
+    fontSize: 11,
+
+    fontWeight: "800",
+
+    color: colors.primary,
+  },
+
+  boardedPassengerRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    gap: spacing.sm,
+
+    backgroundColor: colors.successLight,
+
+    borderRadius: radius.md,
+
+    paddingHorizontal: spacing.md,
+
+    paddingVertical: spacing.sm,
+
+    marginTop: spacing.md,
+  },
+
+  boardedPassengerText: {
+    fontSize: 11,
+
+    fontWeight: "800",
+
+    color: colors.success,
+  },
+  boardingPinCard: {
+    flexDirection: "row",
+
+    backgroundColor: colors.surface,
+
+    borderRadius: radius.lg,
+
+    borderWidth: 1,
+
+    borderColor: colors.primary,
+
+    padding: spacing.md,
+
+    marginBottom: spacing.md,
+
+    ...shadow.card,
+  },
+
+  boardingPinIcon: {
+    width: 48,
+
+    height: 48,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.primaryLight,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginRight: spacing.md,
+  },
+
+  boardingPinLabel: {
+    fontSize: 9,
+
+    fontWeight: "900",
+
+    color: colors.primary,
+
+    letterSpacing: 1,
+  },
+
+  boardingPinValue: {
+    fontSize: 28,
+
+    fontWeight: "900",
+
+    color: colors.textPrimary,
+
+    letterSpacing: 8,
+
+    marginTop: 3,
+  },
+
+  boardingPinHint: {
+    fontSize: 10,
+
+    color: colors.textMuted,
+
+    lineHeight: 15,
+
+    marginTop: 4,
   },
 });
