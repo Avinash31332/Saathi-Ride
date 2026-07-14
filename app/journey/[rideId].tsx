@@ -1,7 +1,17 @@
+import BoardedPassengersDropCard from "@/components/journey/BoardedPassengersDropCard";
+import BoardingPinCard from "@/components/journey/BoardingPinCard";
+import JourneyDriverCard from "@/components/journey/JourneyDriverCard";
+import JourneyHeader from "@/components/journey/JourneyHeader";
+import JourneyHeroCard from "@/components/journey/JourneyHeroCard";
+import JourneyPassengerList from "@/components/journey/JourneyPassengerList";
+import JourneySafetyCard from "@/components/journey/JourneySafetyCard";
+import JourneySOSButton from "@/components/journey/JourneySOSButton";
+import JourneyStartCard from "@/components/journey/JourneyStartCard";
+import JourneyStatusCard from "@/components/journey/JourneyStatusCard";
+import NextPassengerCard from "@/components/journey/NextPassengerCard";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import {
   ActivityIndicator,
   Alert,
@@ -13,19 +23,17 @@ import {
   View,
 } from "react-native";
 
-import BoardingPinCard from "@/components/journey/BoardingPinCard";
-import JourneyDriverCard from "@/components/journey/JourneyDriverCard";
-import JourneyHeader from "@/components/journey/JourneyHeader";
-import JourneyHeroCard from "@/components/journey/JourneyHeroCard";
-import JourneyPassengerList from "@/components/journey/JourneyPassengerList";
-import JourneySafetyCard from "@/components/journey/JourneySafetyCard";
-import JourneyStatusCard from "@/components/journey/JourneyStatusCard";
-import NextPassengerCard from "@/components/journey/NextPassengerCard";
 import useDriverJourneyTracking from "@/hooks/useDriverJourneyTracking";
 
-import { colors, radius, shadow, spacing } from "@/constants/theme";
+import { colors, spacing } from "@/constants/theme";
 
-import JourneySOSButton from "@/components/journey/JourneySOSButton";
+import { getJourneyMilestones } from "@/services/journey-progress.service";
+
+import {
+  canStartJourney,
+  startJourney,
+} from "@/services/journey-state.service";
+
 import {
   getJourneyData,
   getTrustedContactCount,
@@ -33,21 +41,31 @@ import {
   subscribeToJourney,
 } from "@/services/journey.service";
 
+import {
+  activateSafetyMode,
+  getSafetySession,
+  removeSafetySubscription,
+  SafetySession,
+  subscribeToSafetySession,
+} from "@/services/safety.service";
+
+import PassengerDropRequestBottomSheet from "@/components/bottomSheets/PassengerDropRequestSheet";
+import JourneyDropRequestCard from "@/components/journey/JourneyDropRequestCard";
+import { useEventService } from "@/services/event.service";
+import * as SafetyService from "@/services/safety.service";
+
+console.log("Safety exports:", Object.keys(SafetyService));
+
+console.log(
+  "subscribeToSafetySession:",
+  (SafetyService as any).subscribeToSafetySession,
+);
 function clampProgress(value: any) {
   const progress = Number(value || 0);
 
   return Math.min(100, Math.max(0, progress));
 }
 
-function formatStatus(status?: string) {
-  if (!status) {
-    return "Unknown";
-  }
-
-  return status
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
 function DriverTrackingController({
   rideId,
   isDriver,
@@ -76,15 +94,127 @@ export default function JourneyScreen() {
 
   const [journey, setJourney] = useState<any>(null);
 
+  const [safetySession, setSafetySession] = useState<SafetySession | null>(
+    null,
+  );
+
   const [loading, setLoading] = useState(true);
 
   const [refreshing, setRefreshing] = useState(false);
 
+  const [startingJourney, setStartingJourney] = useState(false);
+
   const [trustedContactCount, setTrustedContactCount] = useState(0);
+
+  const safetyRecoveryRunning = useRef(false);
 
   const fade = useRef(new Animated.Value(0)).current;
 
   const slide = useRef(new Animated.Value(18)).current;
+  const bottomSheetRef = useRef<any>(null);
+  /*
+   * LOAD SAFETY SESSION
+   */
+
+  const { showPassengerDropReason } = useEventService();
+
+  const openDropRequest = () => {
+    if (!booking) return;
+
+    showPassengerDropReason({
+      bookingId: booking.id,
+      rideId: ride.id,
+    });
+  };
+
+  const loadSafetySession = useCallback(async (bookingId: string) => {
+    try {
+      const { data, error } = await getSafetySession(bookingId);
+
+      if (error) {
+        console.log("LOAD SAFETY SESSION ERROR:", error);
+
+        return null;
+      }
+
+      setSafetySession(data as SafetySession | null);
+
+      return data as SafetySession | null;
+    } catch (error) {
+      console.log("LOAD SAFETY SESSION EXCEPTION:", error);
+
+      return null;
+    }
+  }, []);
+
+  /*
+   * SAFETY RECOVERY
+   *
+   * Boarding can succeed while safety activation
+   * fails because of network interruption.
+   *
+   * If passenger is already boarded and the safety
+   * session does not exist/is inactive, retry the
+   * activation RPC.
+   */
+
+  const recoverSafetyMode = useCallback(
+    async (booking: any) => {
+      if (!booking?.id) {
+        return;
+      }
+
+      if (!booking.boarding_verified) {
+        return;
+      }
+
+      if (booking.passenger_dropped_at) {
+        return;
+      }
+
+      if (safetyRecoveryRunning.current) {
+        return;
+      }
+
+      safetyRecoveryRunning.current = true;
+
+      try {
+        const currentSession = await loadSafetySession(booking.id);
+
+        if (
+          currentSession?.safety_mode_enabled &&
+          currentSession?.safety_status === "active"
+        ) {
+          console.log("SAFETY RECOVERY: ALREADY ACTIVE");
+
+          return;
+        }
+
+        console.log("SAFETY RECOVERY: ACTIVATING", booking.id);
+
+        const { error } = await activateSafetyMode(booking.id);
+
+        if (error) {
+          console.log("SAFETY RECOVERY ACTIVATION ERROR:", error);
+
+          return;
+        }
+
+        console.log("SAFETY RECOVERY: ACTIVATED", booking.id);
+
+        await loadSafetySession(booking.id);
+      } catch (error) {
+        console.log("SAFETY RECOVERY EXCEPTION:", error);
+      } finally {
+        safetyRecoveryRunning.current = false;
+      }
+    },
+    [loadSafetySession],
+  );
+
+  /*
+   * LOAD JOURNEY
+   */
 
   const loadJourney = useCallback(
     async (showLoader = false) => {
@@ -108,15 +238,16 @@ export default function JourneyScreen() {
 
         setJourney(data);
 
-        if (data?.role === "passenger") {
-          const { count, error: trustedContactError } =
-            await getTrustedContactCount();
+        if (data?.role === "passenger" && data?.booking) {
+          const { count, error: contactError } = await getTrustedContactCount();
 
-          if (trustedContactError) {
-            console.log("TRUSTED CONTACT COUNT ERROR:", trustedContactError);
+          if (contactError) {
+            console.log("TRUSTED CONTACT COUNT ERROR:", contactError);
           }
 
           setTrustedContactCount(count || 0);
+
+          await recoverSafetyMode(data.booking);
         }
       } catch (error: any) {
         console.log("LOAD JOURNEY EXCEPTION:", error);
@@ -131,8 +262,12 @@ export default function JourneyScreen() {
         setRefreshing(false);
       }
     },
-    [rideId],
+    [rideId, recoverSafetyMode],
   );
+
+  /*
+   * JOURNEY REALTIME
+   */
 
   useEffect(() => {
     loadJourney(true);
@@ -160,6 +295,78 @@ export default function JourneyScreen() {
     };
   }, [rideId, loadJourney, fade, slide]);
 
+  /*
+   * SAFETY REALTIME
+   */
+
+  useEffect(() => {
+    const bookingId = journey?.booking?.id;
+
+    if (!bookingId) {
+      return;
+    }
+
+    loadSafetySession(bookingId);
+
+    let channel: any = null;
+
+    subscribeToSafetySession(bookingId, (session) => {
+      console.log("SAFETY SESSION REALTIME UPDATE:", session.safety_status);
+
+      setSafetySession(session);
+    }).then((createdChannel) => {
+      channel = createdChannel;
+    });
+
+    return () => {
+      if (channel) {
+        removeSafetySubscription(channel);
+      }
+    };
+  }, [journey?.booking?.id, loadSafetySession]);
+
+  /*
+   * START JOURNEY
+   */
+
+  const onStartJourney = async () => {
+    if (startingJourney) {
+      return;
+    }
+
+    setStartingJourney(true);
+
+    try {
+      const validation = await canStartJourney(rideId);
+
+      if (!validation.canStart) {
+        Alert.alert(
+          "Journey cannot start",
+          "This ride is no longer in scheduled state.",
+        );
+
+        return;
+      }
+
+      const result = await startJourney(rideId);
+
+      if (result.error) {
+        throw result.error;
+      }
+
+      Alert.alert("Journey Started", "Passengers have been notified.");
+
+      await loadJourney(false);
+    } catch (error: any) {
+      Alert.alert(
+        "Unable to start journey",
+        error?.message ?? "Something went wrong",
+      );
+    } finally {
+      setStartingJourney(false);
+    }
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
 
@@ -186,6 +393,7 @@ export default function JourneyScreen() {
 
       params: {
         id: journey.ride.driver_id,
+
         viewAs: "driver",
       },
     });
@@ -239,6 +447,7 @@ export default function JourneyScreen() {
 
               params: {
                 bookingId: journey.booking.id,
+
                 openSOS: "true",
               },
             });
@@ -247,6 +456,10 @@ export default function JourneyScreen() {
       ],
     );
   };
+
+  /*
+   * LOADING
+   */
 
   if (loading) {
     return (
@@ -311,6 +524,8 @@ export default function JourneyScreen() {
 
   const displayProgress = isDriver ? progress : passengerJourneyProgress;
 
+  const milestones = getJourneyMilestones(displayProgress);
+
   const passengerPickup = booking?.pickup_name || ride.source;
 
   const passengerDrop = booking?.drop_name || ride.destination;
@@ -325,7 +540,16 @@ export default function JourneyScreen() {
       Number(passenger.pickup_route_progress || 0) >= progress,
   );
 
-  const safetyActive = tracking?.tracking_mode === "safety";
+  /*
+   * SAFETY STATUS MUST COME FROM SAFETY SESSION.
+   *
+   * tracking_mode belongs to driver tracking and
+   * must not be used as passenger Safety Mode state.
+   */
+
+  const safetyActive =
+    safetySession?.safety_mode_enabled === true &&
+    safetySession?.safety_status === "active";
 
   return (
     <Animated.View
@@ -343,12 +567,15 @@ export default function JourneyScreen() {
         },
       ]}
     >
-      <DriverTrackingController
-        rideId={rideId}
-        isDriver={isDriver}
-        rideStatus={ride?.ride_status}
-        trackingMode={tracking?.tracking_mode}
-      />
+      {ride?.ride_status === "active" && (
+        <DriverTrackingController
+          rideId={rideId}
+          isDriver={isDriver}
+          rideStatus={ride?.ride_status}
+          trackingMode={tracking?.tracking_mode}
+        />
+      )}
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
@@ -369,7 +596,20 @@ export default function JourneyScreen() {
           travelledDistance={travelledDistance}
           remainingDistance={remainingDistance}
           isDriver={isDriver}
+          milestones={milestones}
+          originalSource={ride.source}
+          originalDestination={ride.destination}
+          pickupProgress={booking?.pickup_route_progress}
+          dropProgress={booking?.drop_route_progress}
+          boarded={booking?.boarding_verified}
         />
+
+        {isDriver && ride?.ride_status === "scheduled" && (
+          <JourneyStartCard
+            loading={startingJourney}
+            onStart={onStartJourney}
+          />
+        )}
 
         {!isDriver &&
           booking &&
@@ -384,6 +624,7 @@ export default function JourneyScreen() {
             onPress={() => {
               if (!nextPassenger.boarding_verified) {
                 openBoardingVerification(nextPassenger.id);
+
                 return;
               }
 
@@ -396,28 +637,41 @@ export default function JourneyScreen() {
           <JourneySafetyCard
             safetyActive={safetyActive}
             trustedContactCount={trustedContactCount}
-            routeDeviation={Boolean(tracking?.route_deviation)}
+            routeDeviation={Boolean(
+              safetySession?.route_deviation_detected ||
+              tracking?.route_deviation,
+            )}
             onPress={openSafetyMode}
           />
         )}
-
         {!isDriver && (
-          <JourneyDriverCard
-            driver={driver}
-            vehicle={vehicle}
-            onPress={openDriverProfile}
-          />
-        )}
+          <>
+            <JourneyDriverCard
+              driver={driver}
+              vehicle={vehicle}
+              onPress={openDriverProfile}
+            />
 
+            {booking?.boarding_verified &&
+              !booking?.passenger_dropped_at &&
+              ride?.ride_status === "active" && (
+                <JourneyDropRequestCard onPress={openDropRequest} />
+              )}
+          </>
+        )}
         {isDriver && (
-          <JourneyPassengerList
-            passengers={passengers}
-            progress={progress}
-            rideSource={ride.source}
-            rideDestination={ride.destination}
-            onVerifyBoarding={openBoardingVerification}
-            onPassengerPress={openPassengerProfile}
-          />
+          <>
+            <JourneyPassengerList
+              passengers={passengers}
+              progress={progress}
+              rideSource={ride.source}
+              rideDestination={ride.destination}
+              onVerifyBoarding={openBoardingVerification}
+              onPassengerPress={openPassengerProfile}
+            />
+
+            <BoardedPassengersDropCard passengers={passengers} />
+          </>
         )}
 
         <JourneyStatusCard
@@ -434,6 +688,11 @@ export default function JourneyScreen() {
           Journey updates are synced automatically
         </Text>
       </ScrollView>
+      <PassengerDropRequestBottomSheet
+        ref={bottomSheetRef}
+        booking={booking}
+        ride={ride}
+      />
     </Animated.View>
   );
 }
@@ -448,10 +707,6 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     paddingTop: spacing.xl,
     paddingBottom: spacing.xl * 2,
-  },
-
-  flex: {
-    flex: 1,
   },
 
   centered: {
@@ -473,180 +728,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "800",
     color: colors.textPrimary,
-  },
-
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-    ...shadow.card,
-  },
-
-  safetyStatus: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radius.md,
-    padding: spacing.md,
-  },
-
-  safetyStatusActive: {
-    backgroundColor: colors.successLight,
-  },
-
-  safetyIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: spacing.sm,
-  },
-
-  safetyTitle: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: colors.textPrimary,
-  },
-
-  safetySubtitle: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    marginTop: 3,
-  },
-
-  statusDot: {
-    width: 9,
-    height: 9,
-    borderRadius: radius.full,
-  },
-
-  safetyMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    marginTop: spacing.md,
-  },
-
-  safetyMetaText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.success,
-  },
-
-  safetyButton: {
-    minHeight: 45,
-    borderRadius: radius.md,
-    backgroundColor: colors.primaryLight,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.md,
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-
-  safetyButtonText: {
-    flex: 1,
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: "800",
-  },
-
-  personRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: radius.full,
-    backgroundColor: colors.primaryLight,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: spacing.sm,
-  },
-
-  nameRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-
-  personName: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: colors.textPrimary,
-  },
-
-  personMeta: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-
-  vehicleText: {
-    fontSize: 11,
-    color: colors.textMuted,
-    marginTop: 3,
-  },
-  statusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  statusIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: radius.md,
-    backgroundColor: colors.successLight,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: spacing.sm,
-  },
-
-  statusTitle: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: colors.textPrimary,
-  },
-
-  statusSubtitle: {
-    fontSize: 10,
-    color: colors.textMuted,
-    marginTop: 3,
-  },
-
-  trackingInfo: {
-    flexDirection: "row",
-    marginTop: spacing.lg,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.md,
-  },
-
-  trackingItem: {
-    flex: 1,
-    alignItems: "center",
-  },
-
-  trackingValue: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: colors.textPrimary,
-    marginTop: 5,
-    textTransform: "capitalize",
-  },
-
-  trackingLabel: {
-    fontSize: 9,
-    color: colors.textMuted,
-    marginTop: 2,
   },
 
   footerText: {

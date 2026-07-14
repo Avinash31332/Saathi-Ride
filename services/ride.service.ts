@@ -37,7 +37,7 @@ export async function createRide(rideData: CreateRideInput) {
     {
       ...rideData,
       available_seats: rideData.max_seats,
-      ride_status: "active",
+      ride_status: "scheduled",
 
       women_only: rideData.women_only ?? false,
 
@@ -163,7 +163,7 @@ export async function searchSegmentRides(
   let query = supabase
     .from("rides")
     .select("*")
-    .eq("ride_status", "active")
+    .in("ride_status", ["scheduled", "active"])
     .not("route_polyline", "is", null);
 
   if (womenOnly) {

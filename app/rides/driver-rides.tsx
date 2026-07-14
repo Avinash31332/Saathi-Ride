@@ -175,7 +175,7 @@ export default function MyRidesScreen() {
       ride.ride_status === "awaiting_confirmation"
     ) {
       router.push({
-        pathname: "/rides/journey/[rideId]",
+        pathname: "/journey/[rideId]",
 
         params: {
           rideId: ride.id,

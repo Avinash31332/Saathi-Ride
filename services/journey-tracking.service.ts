@@ -62,7 +62,11 @@ const ROUTE_CACHE_LIFETIME_MS = 30 * 60 * 1000;
 async function getJourneyRoute(rideId: string) {
   const cached = journeyRouteCache.get(rideId);
 
-  if (cached && Date.now() - cached.loadedAt < ROUTE_CACHE_LIFETIME_MS) {
+  if (
+    cached &&
+    Date.now() - cached.loadedAt < ROUTE_CACHE_LIFETIME_MS &&
+    cached.rideStatus === "active"
+  ) {
     return {
       data: cached,
       error: null,
@@ -159,10 +163,11 @@ export async function processJourneyLocation({
    * Only active journeys should process GPS.
    */
 
-  if (routeResult.data.rideStatus !== "in_progress") {
-    throw new Error("Journey is not currently in progress");
+  if (routeResult.data.rideStatus !== "active") {
+    throw new Error(
+      `Journey is not active. Current status: ${routeResult.data.rideStatus}`,
+    );
   }
-
   /*
    * STEP 2
    *
@@ -205,7 +210,7 @@ export async function processJourneyLocation({
 
     progressPercentage: routeProgress.progressPercentage,
 
-    detectedRouteDeviation: routeProgress.routeDeviation,
+    routeDeviation: routeProgress.routeDeviation,
 
     trackingMode,
   });

@@ -1,8 +1,7 @@
-import { ScrollView, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-
 import CreateRideHero from "@/components/home/CreateRideHero";
 import { Text } from "@react-navigation/elements";
+import { ScrollView, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import ContinueJourneyCard from "../../components/home/ContinueJourneyCard";
 import GreetingCard from "../../components/home/GreetingCard";
 import QuickActionGrid from "../../components/home/QuickActionGrid";
@@ -23,7 +22,7 @@ export default function HomeScreen() {
         <UpcomingRideCard />
         <Text
           style={{
-            ...typography.h3,
+            ...typography.heading,
             marginTop: spacing.xl,
           }}
         >
@@ -47,7 +46,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.primaryLight,
   },
 
   content: {

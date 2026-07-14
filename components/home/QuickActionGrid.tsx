@@ -12,6 +12,11 @@ import { colors, radius, spacing, typography } from "../../constants/theme";
 
 const actions = [
   {
+    title: "My Rides",
+    icon: <Ionicons name="car" size={28} color={colors.primary} />,
+    onPress: () => router.push("/rides/driver-rides"),
+  },
+  {
     title: "Bookings",
     icon: <Ionicons name="ticket" size={28} color={colors.primary} />,
     onPress: () => router.push("/bookings/my-bookings"),
@@ -28,12 +33,7 @@ const actions = [
   {
     title: "Women Only",
     icon: <Ionicons name="female" size={28} color={colors.primary} />,
-    onPress: () => {},
-  },
-  {
-    title: "Ride History",
-    icon: <Ionicons name="time-outline" size={28} color={colors.primary} />,
-    onPress: () => router.push("/activity"),
+    onPress: () => router.push("/profile/trusted-contacts"),
   },
 ];
 
@@ -76,7 +76,7 @@ export default function QuickActionGrid() {
 
 const styles = StyleSheet.create({
   heading: {
-    ...typography.h3,
+    ...typography.heading,
 
     marginBottom: spacing.md,
   },

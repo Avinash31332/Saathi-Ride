@@ -403,7 +403,7 @@ function BookingCard({
                 <Pressable
                   onPress={() =>
                     router.push({
-                      pathname: "/rides/journey/[rideId]",
+                      pathname: "/journey/[rideId]",
 
                       params: {
                         rideId: item.ride_id,

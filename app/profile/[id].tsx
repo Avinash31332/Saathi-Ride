@@ -1,20 +1,20 @@
+import { Ionicons } from "@expo/vector-icons";
 import {
-  View,
-  Text,
   ActivityIndicator,
   ScrollView,
   StyleSheet,
+  Text,
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 
 import { useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 
+import { colors, radius, spacing, typography } from "../../constants/theme";
 import {
   getDriverProfile,
   getDriverVehicles,
 } from "../../services/driver.service";
-import { colors, spacing, radius, typography } from "../../constants/theme";
 
 export default function DriverProfile() {
   const { id } = useLocalSearchParams();

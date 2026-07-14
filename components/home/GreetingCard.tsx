@@ -104,7 +104,7 @@ const styles = StyleSheet.create({
   },
 
   name: {
-    ...typography.h2,
+    ...typography.heading,
 
     color: colors.surface,
 

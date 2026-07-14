@@ -1,6 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { processPassengerJourneyNotifications } from "./journey-notification.service";
 import { processRideCheckpoint } from "./ride-tracking.service";
+import { processSafetyCheckpoint } from "./safety-checkpoint.service";
 
 const CACHE_PREFIX = "@saathi_tracking_";
 
@@ -14,6 +16,12 @@ const SAFETY_HEARTBEAT_MS = 5 * 60 * 1000;
 
 const ROUTE_DEVIATION_CONFIRM_COUNT = 3;
 const ROUTE_RECOVERY_CONFIRM_COUNT = 3;
+
+/*
+ * JOURNEY CHECKPOINTS
+ *
+ * Keep these fixed.
+ */
 
 const CHECKPOINTS = [25, 50, 75, 100];
 
@@ -141,6 +149,7 @@ export async function saveTrackingCache(cache: TrackingCache) {
   try {
     await AsyncStorage.setItem(
       getCacheKey(cache.rideId),
+
       JSON.stringify(cache),
     );
   } catch (error) {
@@ -160,12 +169,74 @@ export async function resetTrackingCache(rideId: string) {
   await clearTrackingCache(rideId);
 }
 
+/*
+ * SAFETY CHECKPOINT PROCESSOR
+ */
+
+async function runSafetyCheckpoint({
+  rideId,
+
+  checkpoint,
+
+  latitude,
+
+  longitude,
+}: {
+  rideId: string;
+
+  checkpoint: number;
+
+  latitude: number;
+
+  longitude: number;
+}) {
+  if (checkpoint <= 0) {
+    return;
+  }
+
+  try {
+    const result = await processSafetyCheckpoint({
+      rideId,
+
+      checkpoint,
+
+      latitude,
+
+      longitude,
+    });
+
+    console.log("SAFETY CHECKPOINT RESULT:", {
+      rideId,
+
+      checkpoint,
+
+      processed: result.processed,
+
+      reason: result.reason,
+    });
+  } catch (error) {
+    /*
+     * GPS upload already succeeded.
+     *
+     * Safety processing failure should not
+     * break driver tracking.
+     */
+
+    console.log("SAFETY CHECKPOINT PIPELINE ERROR:", error);
+  }
+}
+
 export async function adaptiveProcessCheckpoint({
   rideId,
+
   latitude,
+
   longitude,
+
   progressPercentage,
+
   routeDeviation = false,
+
   trackingMode,
 }: AdaptiveCheckpointInput): Promise<AdaptiveCheckpointResult> {
   const now = Date.now();
@@ -181,13 +252,21 @@ export async function adaptiveProcessCheckpoint({
    */
 
   if (!cached) {
-    const { error } = await processRideCheckpoint(rideId, latitude, longitude, {
-      progressPercentage: progress,
+    const { error } = await processRideCheckpoint(
+      rideId,
 
-      routeDeviation: false,
+      latitude,
 
-      trackingMode,
-    });
+      longitude,
+
+      {
+        progressPercentage: progress,
+
+        routeDeviation: false,
+
+        trackingMode,
+      },
+    );
 
     if (error) {
       throw error;
@@ -197,9 +276,11 @@ export async function adaptiveProcessCheckpoint({
       rideId,
 
       lastLatitude: latitude,
+
       lastLongitude: longitude,
 
       lastProgress: progress,
+
       lastCheckpoint: currentCheckpoint,
 
       lastUploadAt: now,
@@ -214,12 +295,61 @@ export async function adaptiveProcessCheckpoint({
     };
 
     await saveTrackingCache(initialCache);
+    /*
+     * PASSENGER JOURNEY EVENTS
+     *
+     * Run only after a successful Supabase
+     * tracking upload.
+     *
+     * Unique notification constraint prevents
+     * duplicate events.
+     */
+
+    try {
+      const notificationResult = await processPassengerJourneyNotifications({
+        rideId,
+
+        progress,
+      });
+
+      console.log("PASSENGER JOURNEY EVENT RESULT:", {
+        rideId,
+
+        progress,
+
+        processedEvents: notificationResult.processedEvents,
+      });
+    } catch (error) {
+      console.log("PASSENGER JOURNEY EVENT ERROR:", error);
+    }
 
     console.log("ADAPTIVE TRACKING: INITIAL UPLOAD", {
       rideId,
+
       progress,
+
       checkpoint: currentCheckpoint,
     });
+
+    /*
+     * IMPORTANT
+     *
+     * If tracking starts after the driver
+     * already crossed a checkpoint, process
+     * the currently reached checkpoint.
+     */
+
+    if (currentCheckpoint > 0) {
+      await runSafetyCheckpoint({
+        rideId,
+
+        checkpoint: currentCheckpoint,
+
+        latitude,
+
+        longitude,
+      });
+    }
 
     return {
       uploaded: true,
@@ -276,8 +406,11 @@ export async function adaptiveProcessCheckpoint({
 
   const distanceMovedKm = calculateDistanceKm(
     cached.lastLatitude,
+
     cached.lastLongitude,
+
     latitude,
+
     longitude,
   );
 
@@ -396,34 +529,42 @@ export async function adaptiveProcessCheckpoint({
     trackingMode,
   });
 
-  const { error } = await processRideCheckpoint(rideId, latitude, longitude, {
-    progressPercentage: progress,
+  const { error } = await processRideCheckpoint(
+    rideId,
 
-    routeDeviation: confirmedRouteDeviation,
+    latitude,
 
-    trackingMode,
-  });
+    longitude,
+
+    {
+      progressPercentage: progress,
+
+      routeDeviation: confirmedRouteDeviation,
+
+      trackingMode,
+    },
+  );
 
   /*
-   * IMPORTANT:
-   *
-   * Do not update last uploaded location,
-   * progress or timestamp if Supabase failed.
-   *
-   * The next GPS reading retries.
+   * Do not move cache forward if
+   * Supabase upload failed.
    */
 
   if (error) {
     throw error;
   }
 
+  const previousCheckpoint = cached.lastCheckpoint;
+
   const updatedCache: TrackingCache = {
     rideId,
 
     lastLatitude: latitude,
+
     lastLongitude: longitude,
 
     lastProgress: progress,
+
     lastCheckpoint: currentCheckpoint,
 
     lastUploadAt: now,
@@ -438,6 +579,25 @@ export async function adaptiveProcessCheckpoint({
   };
 
   await saveTrackingCache(updatedCache);
+
+  /*
+   * SAFETY CHECKPOINT PIPELINE
+   *
+   * Only process when a new checkpoint
+   * was crossed.
+   */
+
+  if (reason === "checkpoint" && currentCheckpoint > previousCheckpoint) {
+    await runSafetyCheckpoint({
+      rideId,
+
+      checkpoint: currentCheckpoint,
+
+      latitude,
+
+      longitude,
+    });
+  }
 
   return {
     uploaded: true,

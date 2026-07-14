@@ -1,17 +1,17 @@
+import { Ionicons } from "@expo/vector-icons";
 import React, { useState } from "react";
 import {
-  View,
-  Text,
-  Pressable,
-  TextInput,
-  Alert,
   ActivityIndicator,
+  Alert,
+  Pressable,
   StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 
+import { colors, radius, spacing, typography } from "../../constants/theme";
 import { confirmPassengerDrop } from "../../services/booking.service";
-import { colors, spacing, radius, typography } from "../../constants/theme";
 
 const reasons: { label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { label: "Reached Destination", icon: "flag-outline" },
@@ -26,6 +26,10 @@ export default function PassengerDropReasonSheet({ payload, onClose }: any) {
   const [selected, setSelected] = useState("");
   const [otherReason, setOtherReason] = useState("");
   const [loading, setLoading] = useState(false);
+
+  if (!payload) {
+    return null;
+  }
 
   const submit = async () => {
     setLoading(true);

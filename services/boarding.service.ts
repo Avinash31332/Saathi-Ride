@@ -1,3 +1,4 @@
+import { activateSafetyMode } from "./safety.service";
 import { supabase } from "./supabase";
 
 export interface VerifyBoardingPinResult {
@@ -6,6 +7,8 @@ export interface VerifyBoardingPinResult {
   rideId?: string;
   passengerId?: string;
   boardedAt?: string;
+  safetyActivated?: boolean;
+  safetyError?: any;
   error: any;
 }
 
@@ -34,6 +37,10 @@ export async function verifyBoardingPin(
         error: new Error("Enter the boarding PIN"),
       };
     }
+
+    /*
+     * VERIFY BOARDING
+     */
 
     const { data, error } = await supabase.rpc("verify_boarding_pin", {
       p_booking_id: bookingId,
@@ -65,12 +72,52 @@ export async function verifyBoardingPin(
       };
     }
 
+    const verifiedBookingId = result.booking_id || bookingId;
+
+    /*
+     * ACTIVATE PASSENGER SAFETY
+     *
+     * Boarding must remain successful even if
+     * safety activation temporarily fails.
+     *
+     * The safety session can later be recovered
+     * by the journey screen/recovery service.
+     */
+
+    let safetyActivated = false;
+    let safetyError: any = null;
+
+    try {
+      const { error: activationError } =
+        await activateSafetyMode(verifiedBookingId);
+
+      if (activationError) {
+        safetyError = activationError;
+
+        console.log("SAFETY MODE ACTIVATION ERROR:", activationError);
+      } else {
+        safetyActivated = true;
+
+        console.log("SAFETY MODE ACTIVATED:", {
+          bookingId: verifiedBookingId,
+          rideId: result.ride_id,
+          passengerId: result.passenger_id,
+        });
+      }
+    } catch (activationError) {
+      safetyError = activationError;
+
+      console.log("SAFETY MODE ACTIVATION EXCEPTION:", activationError);
+    }
+
     return {
       success: true,
-      bookingId: result.booking_id,
+      bookingId: verifiedBookingId,
       rideId: result.ride_id,
       passengerId: result.passenger_id,
       boardedAt: result.boarded_at,
+      safetyActivated,
+      safetyError,
       error: null,
     };
   } catch (error) {

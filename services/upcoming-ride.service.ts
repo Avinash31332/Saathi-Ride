@@ -21,7 +21,7 @@ export async function getUpcomingRide() {
     .from("rides")
     .select("*")
     .eq("driver_id", user.id)
-    .eq("ride_status", "scheduled")
+    .in("ride_status", ["scheduled", "active"])
     .order("ride_date", {
       ascending: true,
     })
@@ -45,7 +45,7 @@ export async function getUpcomingRide() {
     )
     .eq("passenger_id", user.id)
     .eq("booking_status", "confirmed")
-    .eq("rides.ride_status", "scheduled")
+    .in("rides.ride_status", ["scheduled"])
     .order("created_at")
     .limit(1)
     .maybeSingle();

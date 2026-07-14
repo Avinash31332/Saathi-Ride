@@ -8,6 +8,10 @@ import { colors, spacing, radius, typography } from "../../constants/theme";
 export default function PassengerDropRequestSheet({ payload, onClose }: any) {
   const { showPassengerDropReason } = useEventService();
 
+  if (!payload) {
+    return null;
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.iconWrap}>

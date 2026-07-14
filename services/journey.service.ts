@@ -267,13 +267,23 @@ export function subscribeToJourney(rideId: string, onChange: () => void) {
     .on(
       "postgres_changes",
       {
-        event: "*",
+        event: "UPDATE",
         schema: "public",
         table: "rides",
         filter: `id=eq.${rideId}`,
       },
-      () => {
+      (payload) => {
         console.log("Journey ride updated");
+
+        const oldStatus = (payload.old as any)?.ride_status;
+        const newStatus = (payload.new as any)?.ride_status;
+
+        if (oldStatus === "scheduled" && newStatus === "active") {
+          console.log("Journey Started");
+
+          // Don't show Alert here
+          // We'll trigger it from the screen instead.
+        }
 
         onChange();
       },

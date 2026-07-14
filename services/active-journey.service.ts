@@ -63,17 +63,15 @@ export async function getMyActiveJourney(): Promise<{
       `
       id,
       ride_id,
-      boarding_verified,
       rides!inner(
         id,
         ride_status
       )
-      `,
+  `,
     )
     .eq("passenger_id", user.id)
-    .eq("boarding_verified", true)
     .eq("booking_status", "confirmed")
-    .in("rides.ride_status", ["active", "in_progress"])
+    .in("rides.ride_status", ["active"])
     .limit(1);
 
   if (bookingError) {

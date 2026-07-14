@@ -31,16 +31,6 @@ export default function PassengerView({ profile }: any) {
 
       <SectionHeader title="Passenger" />
 
-      <StatCard title="Trusted Contacts" value="Manage" icon="people" />
-
-      <View
-        style={{
-          height: spacing.md,
-        }}
-      />
-
-      <StatCard title="Booking History" value="View" icon="time" />
-
       <View
         style={{
           height: spacing.md,
@@ -48,9 +38,10 @@ export default function PassengerView({ profile }: any) {
       />
 
       <StatCard
-        title="Passenger Reviews"
+        title="Booking History"
         value="View"
-        icon="chatbox-ellipses"
+        icon="time"
+        onPress={() => router.push("/bookings/my-bookings")}
       />
 
       <View
@@ -59,7 +50,6 @@ export default function PassengerView({ profile }: any) {
         }}
       />
 
-      <StatCard title="Safety Mode" value="Enabled" icon="shield" />
       <StatCard
         title="Trusted Contacts"
         value="Manage"
