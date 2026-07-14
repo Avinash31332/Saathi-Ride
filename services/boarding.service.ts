@@ -1,96 +1,84 @@
 import { supabase } from "./supabase";
 
-export interface BoardingVerificationResult {
+export interface VerifyBoardingPinResult {
   success: boolean;
-
-  already_verified: boolean;
-
-  booking_id: string;
-
-  passenger_id: string;
-
-  ride_id?: string;
-
-  boarded_at?: string;
+  bookingId?: string;
+  rideId?: string;
+  passengerId?: string;
+  boardedAt?: string;
+  error: any;
 }
 
-export async function verifyPassengerBoarding({
-  bookingId,
-  pin,
-}: {
-  bookingId: string;
+export async function verifyBoardingPin(
+  bookingId: string,
+  pin: string,
+): Promise<VerifyBoardingPinResult> {
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
 
-  pin: string;
-}) {
-  const cleanPin = pin.trim();
+    if (userError || !user) {
+      return {
+        success: false,
+        error: userError || new Error("User not authenticated"),
+      };
+    }
 
-  if (!/^\d{4}$/.test(cleanPin)) {
-    return {
-      data: null,
+    const cleanPin = pin.trim();
 
-      error: new Error("Enter the 4-digit boarding PIN"),
-    };
-  }
+    if (!cleanPin) {
+      return {
+        success: false,
+        error: new Error("Enter the boarding PIN"),
+      };
+    }
 
-  const { data, error } = await supabase.rpc(
-    "verify_passenger_boarding",
-
-    {
+    const { data, error } = await supabase.rpc("verify_boarding_pin", {
       p_booking_id: bookingId,
-
       p_pin: cleanPin,
-    },
-  );
+    });
 
-  if (error) {
-    console.log("VERIFY BOARDING ERROR:", error);
+    if (error) {
+      console.log("VERIFY BOARDING PIN RPC ERROR:", error);
+
+      return {
+        success: false,
+        error,
+      };
+    }
+
+    const result = Array.isArray(data) ? data[0] : data;
+
+    if (!result) {
+      return {
+        success: false,
+        error: new Error("Unable to verify boarding PIN"),
+      };
+    }
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: new Error(result.message || "Invalid boarding PIN"),
+      };
+    }
 
     return {
-      data: null,
+      success: true,
+      bookingId: result.booking_id,
+      rideId: result.ride_id,
+      passengerId: result.passenger_id,
+      boardedAt: result.boarded_at,
+      error: null,
+    };
+  } catch (error) {
+    console.log("VERIFY BOARDING PIN ERROR:", error);
 
+    return {
+      success: false,
       error,
     };
   }
-
-  console.log("PASSENGER BOARDING VERIFIED:", data);
-
-  return {
-    data: data as BoardingVerificationResult,
-
-    error: null,
-  };
-}
-
-export async function getPassengerBoardingPin(bookingId: string) {
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
-
-  if (userError || !user) {
-    return {
-      data: null,
-
-      error: userError || new Error("User not authenticated"),
-    };
-  }
-
-  return await supabase
-    .from("bookings")
-    .select(
-      `
-      id,
-      ride_id,
-      passenger_id,
-      boarding_pin,
-      boarding_verified,
-      boarded_at,
-      booking_status,
-      pickup_name,
-      drop_name
-      `,
-    )
-    .eq("id", bookingId)
-    .eq("passenger_id", user.id)
-    .single();
 }

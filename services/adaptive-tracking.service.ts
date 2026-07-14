@@ -12,10 +12,8 @@ const SAFETY_PROGRESS_THRESHOLD = 2;
 const SAFETY_DISTANCE_THRESHOLD_KM = 2;
 const SAFETY_HEARTBEAT_MS = 5 * 60 * 1000;
 
-const NORMAL_OFF_ROUTE_CONFIRMATION_COUNT = 3;
-const SAFETY_OFF_ROUTE_CONFIRMATION_COUNT = 2;
-
-const ROUTE_RECOVERY_CONFIRMATION_COUNT = 2;
+const ROUTE_DEVIATION_CONFIRM_COUNT = 3;
+const ROUTE_RECOVERY_CONFIRM_COUNT = 3;
 
 const CHECKPOINTS = [25, 50, 75, 100];
 
@@ -48,7 +46,7 @@ export interface AdaptiveCheckpointInput {
 
   progressPercentage: number;
 
-  detectedRouteDeviation: boolean;
+  routeDeviation?: boolean;
 
   trackingMode: AdaptiveTrackingMode;
 }
@@ -62,8 +60,7 @@ export interface AdaptiveCheckpointResult {
     | "progress"
     | "distance"
     | "heartbeat"
-    | "deviation_started"
-    | "deviation_ended"
+    | "route_deviation"
     | "cached";
 
   checkpoint: number;
@@ -168,7 +165,7 @@ export async function adaptiveProcessCheckpoint({
   latitude,
   longitude,
   progressPercentage,
-  detectedRouteDeviation,
+  routeDeviation = false,
   trackingMode,
 }: AdaptiveCheckpointInput): Promise<AdaptiveCheckpointResult> {
   const now = Date.now();
@@ -180,10 +177,22 @@ export async function adaptiveProcessCheckpoint({
   const cached = await getTrackingCache(rideId);
 
   /*
-   * FIRST GPS READING
+   * FIRST GPS LOCATION
    */
 
   if (!cached) {
+    const { error } = await processRideCheckpoint(rideId, latitude, longitude, {
+      progressPercentage: progress,
+
+      routeDeviation: false,
+
+      trackingMode,
+    });
+
+    if (error) {
+      throw error;
+    }
+
     const initialCache: TrackingCache = {
       rideId,
 
@@ -195,71 +204,56 @@ export async function adaptiveProcessCheckpoint({
 
       lastUploadAt: now,
 
-      /*
-       * Never confirm deviation from one
-       * GPS reading.
-       */
-
       routeDeviation: false,
 
-      offRouteReadingCount: detectedRouteDeviation ? 1 : 0,
+      offRouteReadingCount: routeDeviation ? 1 : 0,
 
-      onRouteReadingCount: detectedRouteDeviation ? 0 : 1,
+      onRouteReadingCount: routeDeviation ? 0 : 1,
 
       trackingMode,
     };
 
-    const { error } = await processRideCheckpoint(rideId, latitude, longitude);
-
-    if (error) {
-      throw error;
-    }
-
     await saveTrackingCache(initialCache);
 
     console.log("ADAPTIVE TRACKING: INITIAL UPLOAD", {
+      rideId,
       progress,
-      detectedRouteDeviation,
+      checkpoint: currentCheckpoint,
     });
 
     return {
       uploaded: true,
+
       reason: "initial",
+
       checkpoint: currentCheckpoint,
+
       cache: initialCache,
     };
   }
 
   /*
-   * UPDATE DEVIATION COUNTERS LOCALLY
+   * ROUTE DEVIATION CONFIRMATION
    */
-
-  let confirmedRouteDeviation = cached.routeDeviation;
-
-  let deviationStarted = false;
-  let deviationEnded = false;
 
   let offRouteReadingCount = cached.offRouteReadingCount || 0;
 
   let onRouteReadingCount = cached.onRouteReadingCount || 0;
 
-  if (detectedRouteDeviation) {
+  let confirmedRouteDeviation = cached.routeDeviation;
+
+  if (routeDeviation) {
     offRouteReadingCount += 1;
 
     onRouteReadingCount = 0;
 
-    const requiredOffRouteReadings =
-      trackingMode === "safety"
-        ? SAFETY_OFF_ROUTE_CONFIRMATION_COUNT
-        : NORMAL_OFF_ROUTE_CONFIRMATION_COUNT;
-
     if (
       !confirmedRouteDeviation &&
-      offRouteReadingCount >= requiredOffRouteReadings
+      offRouteReadingCount >= ROUTE_DEVIATION_CONFIRM_COUNT
     ) {
       confirmedRouteDeviation = true;
 
-      deviationStarted = true;
+      console.log("ROUTE DEVIATION CONFIRMED:", rideId);
     }
   } else {
     onRouteReadingCount += 1;
@@ -268,13 +262,17 @@ export async function adaptiveProcessCheckpoint({
 
     if (
       confirmedRouteDeviation &&
-      onRouteReadingCount >= ROUTE_RECOVERY_CONFIRMATION_COUNT
+      onRouteReadingCount >= ROUTE_RECOVERY_CONFIRM_COUNT
     ) {
       confirmedRouteDeviation = false;
 
-      deviationEnded = true;
+      console.log("ROUTE RECOVERY CONFIRMED:", rideId);
     }
   }
+
+  /*
+   * LOCAL COMPARISONS
+   */
 
   const distanceMovedKm = calculateDistanceKm(
     cached.lastLatitude,
@@ -288,6 +286,9 @@ export async function adaptiveProcessCheckpoint({
   const timeSinceLastUpload = now - cached.lastUploadAt;
 
   const checkpointCrossed = currentCheckpoint > cached.lastCheckpoint;
+
+  const routeDeviationChanged =
+    confirmedRouteDeviation !== cached.routeDeviation;
 
   const isSafetyMode = trackingMode === "safety";
 
@@ -308,21 +309,17 @@ export async function adaptiveProcessCheckpoint({
   let reason: AdaptiveCheckpointResult["reason"] = "cached";
 
   /*
-   * EVENT PRIORITY
+   * UPLOAD PRIORITY
    */
 
-  if (deviationStarted) {
-    shouldUpload = true;
-
-    reason = "deviation_started";
-  } else if (deviationEnded) {
-    shouldUpload = true;
-
-    reason = "deviation_ended";
-  } else if (checkpointCrossed) {
+  if (checkpointCrossed) {
     shouldUpload = true;
 
     reason = "checkpoint";
+  } else if (routeDeviationChanged) {
+    shouldUpload = true;
+
+    reason = "route_deviation";
   } else if (progressDifference >= progressThreshold) {
     shouldUpload = true;
 
@@ -338,101 +335,117 @@ export async function adaptiveProcessCheckpoint({
   }
 
   /*
-   * IMPORTANT
-   *
-   * Counter changes must be saved even when
-   * Supabase is not touched.
-   *
-   * Otherwise:
-   *
-   * reading 1 → count 1
-   * app reads old cache → count 1 again
-   *
-   * and deviation would never confirm.
+   * CACHE ONLY
    */
 
-  const localCache: TrackingCache = {
-    ...cached,
-
-    lastLatitude: latitude,
-    lastLongitude: longitude,
-
-    routeDeviation: confirmedRouteDeviation,
-
-    offRouteReadingCount,
-    onRouteReadingCount,
-
-    trackingMode,
-  };
-
   if (!shouldUpload) {
-    await saveTrackingCache(localCache);
-
-    console.log("ADAPTIVE TRACKING: CACHE ONLY", {
-      progress: progress.toFixed(2),
-
-      detectedRouteDeviation,
-
-      confirmedRouteDeviation,
+    const updatedLocalCache: TrackingCache = {
+      ...cached,
 
       offRouteReadingCount,
 
       onRouteReadingCount,
 
+      trackingMode,
+    };
+
+    await saveTrackingCache(updatedLocalCache);
+
+    console.log("ADAPTIVE TRACKING: CACHED", {
+      progress,
+
+      progressDifference,
+
       distanceMovedKm: distanceMovedKm.toFixed(2),
+
+      rawDeviation: routeDeviation,
+
+      confirmedDeviation: confirmedRouteDeviation,
+
+      offRouteReadingCount,
+
+      onRouteReadingCount,
     });
 
     return {
       uploaded: false,
+
       reason: "cached",
+
       checkpoint: cached.lastCheckpoint,
-      cache: localCache,
+
+      cache: updatedLocalCache,
     };
   }
 
+  /*
+   * SUPABASE UPLOAD
+   */
+
   console.log("ADAPTIVE TRACKING: UPLOAD", {
+    rideId,
+
     reason,
 
-    progress: progress.toFixed(2),
+    progress,
 
     checkpoint: currentCheckpoint,
 
     confirmedRouteDeviation,
 
-    distanceMovedKm: distanceMovedKm.toFixed(2),
+    trackingMode,
   });
 
-  const { error } = await processRideCheckpoint(rideId, latitude, longitude);
+  const { error } = await processRideCheckpoint(rideId, latitude, longitude, {
+    progressPercentage: progress,
+
+    routeDeviation: confirmedRouteDeviation,
+
+    trackingMode,
+  });
+
+  /*
+   * IMPORTANT:
+   *
+   * Do not update last uploaded location,
+   * progress or timestamp if Supabase failed.
+   *
+   * The next GPS reading retries.
+   */
 
   if (error) {
-    /*
-     * Save local counters.
-     *
-     * But do NOT move last uploaded progress
-     * or upload time.
-     */
-
-    await saveTrackingCache(localCache);
-
     throw error;
   }
 
   const updatedCache: TrackingCache = {
-    ...localCache,
+    rideId,
+
+    lastLatitude: latitude,
+    lastLongitude: longitude,
 
     lastProgress: progress,
-
     lastCheckpoint: currentCheckpoint,
 
     lastUploadAt: now,
+
+    routeDeviation: confirmedRouteDeviation,
+
+    offRouteReadingCount,
+
+    onRouteReadingCount,
+
+    trackingMode,
   };
 
   await saveTrackingCache(updatedCache);
 
   return {
     uploaded: true,
+
     reason,
+
     checkpoint: currentCheckpoint,
+
     cache: updatedCache,
   };
 }

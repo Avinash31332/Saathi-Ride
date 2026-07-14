@@ -1,93 +1,38 @@
 import { supabase } from "./supabase";
 
-export interface RideTrackingSnapshot {
-  ride_id: string;
+export interface ProcessRideCheckpointOptions {
+  progressPercentage: number;
 
-  driver_lat: number;
+  routeDeviation?: boolean;
 
-  driver_lng: number;
-
-  progress_percentage: number;
-
-  distance_to_destination_km: number;
-
-  tracking_mode: string;
-
-  last_checkpoint: number;
-
-  last_location_at: string;
-
-  route_deviation: boolean;
-
-  updated_at: string;
+  trackingMode?: "normal" | "safety";
 }
 
 export async function processRideCheckpoint(
   rideId: string,
   latitude: number,
   longitude: number,
+  options: ProcessRideCheckpointOptions,
 ) {
+  const {
+    progressPercentage,
+
+    routeDeviation = false,
+
+    trackingMode = "normal",
+  } = options;
+
   return await supabase.rpc("process_ride_checkpoint", {
     p_ride_id: rideId,
-    p_lat: latitude,
-    p_lng: longitude,
+
+    p_latitude: latitude,
+
+    p_longitude: longitude,
+
+    p_progress_percentage: progressPercentage,
+
+    p_route_deviation: routeDeviation,
+
+    p_tracking_mode: trackingMode,
   });
-}
-
-export async function getLatestRideTracking(rideId: string) {
-  return await supabase
-    .from("ride_tracking")
-    .select("*")
-    .eq("ride_id", rideId)
-    .maybeSingle();
-}
-
-export async function getRideSafetyEvents(rideId: string, passengerId: string) {
-  return await supabase
-    .from("ride_safety_events")
-    .select("*")
-    .eq("ride_id", rideId)
-    .eq("passenger_id", passengerId)
-    .order("created_at", {
-      ascending: true,
-    });
-}
-
-export function subscribeToRideTracking(
-  rideId: string,
-  onUpdate: (snapshot: RideTrackingSnapshot) => void,
-) {
-  const channel = supabase
-    .channel(`ride-tracking-${rideId}-${Date.now()}`)
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "ride_tracking",
-        filter: `ride_id=eq.${rideId}`,
-      },
-      (payload) => {
-        console.log("Driver tracking updated:", payload.eventType);
-
-        if (!payload.new) {
-          return;
-        }
-
-        onUpdate(payload.new as RideTrackingSnapshot);
-      },
-    )
-    .subscribe((status) => {
-      console.log("Tracking Realtime:", status);
-    });
-
-  return channel;
-}
-
-export async function removeRideTrackingSubscription(channel: any) {
-  if (!channel) {
-    return;
-  }
-
-  await supabase.removeChannel(channel);
 }

@@ -12,6 +12,7 @@ const ACTIVE_RIDE_KEY = "@saathi_active_tracking_ride";
 
 export interface ActiveBackgroundRide {
   rideId: string;
+
   trackingMode: AdaptiveTrackingMode;
 }
 
@@ -32,21 +33,28 @@ async function getActiveBackgroundRide(): Promise<ActiveBackgroundRide | null> {
 }
 
 async function saveActiveBackgroundRide(ride: ActiveBackgroundRide) {
-  await AsyncStorage.setItem(ACTIVE_RIDE_KEY, JSON.stringify(ride));
+  try {
+    await AsyncStorage.setItem(ACTIVE_RIDE_KEY, JSON.stringify(ride));
+  } catch (error) {
+    console.log("BACKGROUND ACTIVE RIDE SAVE ERROR:", error);
+
+    throw error;
+  }
 }
 
 async function clearActiveBackgroundRide() {
-  await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+  try {
+    await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+  } catch (error) {
+    console.log("BACKGROUND ACTIVE RIDE CLEAR ERROR:", error);
+  }
 }
 
 /*
  * IMPORTANT
  *
- * TaskManager.defineTask MUST remain in
- * global scope.
- *
- * Do not move this inside a component,
- * hook or function.
+ * TaskManager.defineTask MUST remain
+ * in global module scope.
  */
 
 TaskManager.defineTask(
@@ -79,16 +87,30 @@ TaskManager.defineTask(
     }
 
     /*
-     * We only need the latest location.
+     * Android may batch locations.
      *
-     * If Android batches several GPS readings,
-     * processing every old reading would waste
-     * route calculations.
+     * Only process the newest reading.
      */
 
     const latestLocation = locations[locations.length - 1];
 
     const { latitude, longitude, accuracy } = latestLocation.coords;
+
+    if (typeof latitude !== "number" || typeof longitude !== "number") {
+      console.log("BACKGROUND GPS INVALID LOCATION");
+
+      return;
+    }
+
+    /*
+     * Ignore highly inaccurate readings.
+     */
+
+    if (typeof accuracy === "number" && accuracy > 100) {
+      console.log("BACKGROUND GPS LOW ACCURACY SKIPPED:", accuracy);
+
+      return;
+    }
 
     console.log("BACKGROUND DRIVER GPS:", {
       rideId: activeRide.rideId,
@@ -116,11 +138,17 @@ TaskManager.defineTask(
       console.log("BACKGROUND GPS PROCESSED:", {
         progress: result.routeProgress.progressPercentage,
 
-        deviation: result.adaptiveResult.cache.routeDeviation,
+        distanceFromRouteKm: result.routeProgress.distanceFromRouteKm,
+
+        detectedDeviation: result.routeProgress.routeDeviation,
+
+        confirmedDeviation: result.adaptiveResult.cache.routeDeviation,
 
         uploaded: result.adaptiveResult.uploaded,
 
         reason: result.adaptiveResult.reason,
+
+        checkpoint: result.adaptiveResult.checkpoint,
       });
     } catch (processingError) {
       console.log("BACKGROUND GPS PROCESS ERROR:", processingError);
@@ -128,89 +156,170 @@ TaskManager.defineTask(
   },
 );
 
+/*
+ * BACKGROUND PERMISSION
+ *
+ * IMPORTANT:
+ *
+ * Some development builds may not contain
+ * ACCESS_BACKGROUND_LOCATION.
+ *
+ * We catch native permission failures and
+ * allow foreground GPS to continue.
+ */
+
 export async function requestBackgroundLocationPermission() {
-  const foreground = await Location.requestForegroundPermissionsAsync();
+  try {
+    const foreground = await Location.getForegroundPermissionsAsync();
 
-  if (foreground.status !== "granted") {
+    let foregroundStatus = foreground.status;
+
+    if (foregroundStatus !== "granted") {
+      const foregroundRequest =
+        await Location.requestForegroundPermissionsAsync();
+
+      foregroundStatus = foregroundRequest.status;
+    }
+
+    if (foregroundStatus !== "granted") {
+      return {
+        granted: false,
+
+        unavailable: false,
+
+        error: new Error("Foreground location permission is required"),
+      };
+    }
+
+    try {
+      const background = await Location.requestBackgroundPermissionsAsync();
+
+      if (background.status !== "granted") {
+        return {
+          granted: false,
+
+          unavailable: false,
+
+          error: new Error("Background location permission was not granted"),
+        };
+      }
+
+      return {
+        granted: true,
+
+        unavailable: false,
+
+        error: null,
+      };
+    } catch (error: any) {
+      console.log(
+        "BACKGROUND LOCATION NOT AVAILABLE IN BUILD:",
+        error?.message || error,
+      );
+
+      return {
+        granted: false,
+
+        unavailable: true,
+
+        error: null,
+      };
+    }
+  } catch (error) {
+    console.log("BACKGROUND LOCATION PERMISSION ERROR:", error);
+
     return {
       granted: false,
 
-      error: new Error("Foreground location permission is required"),
+      unavailable: false,
+
+      error,
     };
   }
-
-  const background = await Location.requestBackgroundPermissionsAsync();
-
-  if (background.status !== "granted") {
-    return {
-      granted: false,
-
-      error: new Error(
-        "Background location permission is required for journey tracking",
-      ),
-    };
-  }
-
-  return {
-    granted: true,
-
-    error: null,
-  };
 }
 
 export async function startBackgroundDriverTracking({
   rideId,
+
   trackingMode = "normal",
 }: {
   rideId: string;
+
   trackingMode?: AdaptiveTrackingMode;
 }) {
   const permission = await requestBackgroundLocationPermission();
 
-  if (!permission.granted) {
+  /*
+   * Current development build does not
+   * support background location.
+   *
+   * Foreground GPS continues normally.
+   */
+
+  if (permission.unavailable) {
+    console.log(
+      "BACKGROUND GPS UNAVAILABLE - USING FOREGROUND TRACKING:",
+      rideId,
+    );
+
     return {
       started: false,
 
-      error: permission.error,
-    };
-  }
+      alreadyActive: false,
 
-  await saveActiveBackgroundRide({
-    rideId,
-
-    trackingMode,
-  });
-
-  const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(
-    DRIVER_BACKGROUND_LOCATION_TASK,
-  );
-
-  if (alreadyStarted) {
-    console.log("BACKGROUND GPS ALREADY ACTIVE");
-
-    return {
-      started: true,
-
-      alreadyActive: true,
+      unavailable: true,
 
       error: null,
     };
   }
 
+  if (!permission.granted) {
+    return {
+      started: false,
+
+      alreadyActive: false,
+
+      unavailable: false,
+
+      error: permission.error,
+    };
+  }
+
   try {
+    await saveActiveBackgroundRide({
+      rideId,
+
+      trackingMode,
+    });
+
+    const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(
+      DRIVER_BACKGROUND_LOCATION_TASK,
+    );
+
+    if (alreadyStarted) {
+      console.log("BACKGROUND GPS ALREADY ACTIVE:", rideId);
+
+      /*
+       * Active ride information was already
+       * updated above.
+       */
+
+      return {
+        started: true,
+
+        alreadyActive: true,
+
+        unavailable: false,
+
+        error: null,
+      };
+    }
+
     await Location.startLocationUpdatesAsync(
       DRIVER_BACKGROUND_LOCATION_TASK,
 
       {
         accuracy: Location.Accuracy.High,
-
-        /*
-         * Android may provide readings more often.
-         *
-         * Adaptive tracking decides whether
-         * Supabase should actually receive an
-         * update.
-         */
 
         distanceInterval: 100,
 
@@ -239,6 +348,8 @@ export async function startBackgroundDriverTracking({
 
       alreadyActive: false,
 
+      unavailable: false,
+
       error: null,
     };
   } catch (error) {
@@ -251,18 +362,24 @@ export async function startBackgroundDriverTracking({
 
       alreadyActive: false,
 
+      unavailable: false,
+
       error,
     };
   }
 }
 
 export async function stopBackgroundDriverTracking() {
-  const started = await Location.hasStartedLocationUpdatesAsync(
-    DRIVER_BACKGROUND_LOCATION_TASK,
-  );
+  try {
+    const started = await Location.hasStartedLocationUpdatesAsync(
+      DRIVER_BACKGROUND_LOCATION_TASK,
+    );
 
-  if (started) {
-    await Location.stopLocationUpdatesAsync(DRIVER_BACKGROUND_LOCATION_TASK);
+    if (started) {
+      await Location.stopLocationUpdatesAsync(DRIVER_BACKGROUND_LOCATION_TASK);
+    }
+  } catch (error) {
+    console.log("STOP BACKGROUND GPS ERROR:", error);
   }
 
   await clearActiveBackgroundRide();
@@ -275,17 +392,23 @@ export async function stopBackgroundDriverTracking() {
 }
 
 export async function isBackgroundDriverTrackingRide(rideId: string) {
-  const started = await Location.hasStartedLocationUpdatesAsync(
-    DRIVER_BACKGROUND_LOCATION_TASK,
-  );
+  try {
+    const started = await Location.hasStartedLocationUpdatesAsync(
+      DRIVER_BACKGROUND_LOCATION_TASK,
+    );
 
-  if (!started) {
+    if (!started) {
+      return false;
+    }
+
+    const activeRide = await getActiveBackgroundRide();
+
+    return activeRide?.rideId === rideId;
+  } catch (error) {
+    console.log("CHECK BACKGROUND GPS ERROR:", error);
+
     return false;
   }
-
-  const activeRide = await getActiveBackgroundRide();
-
-  return activeRide?.rideId === rideId;
 }
 
 export async function setBackgroundTrackingMode(

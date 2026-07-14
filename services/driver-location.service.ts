@@ -3,13 +3,6 @@ import * as Location from "expo-location";
 import { AdaptiveTrackingMode } from "./adaptive-tracking.service";
 
 import {
-  isBackgroundDriverTrackingRide,
-  setBackgroundTrackingMode,
-  startBackgroundDriverTracking,
-  stopBackgroundDriverTracking,
-} from "./background-location.service";
-
-import {
   prepareJourneyTracking,
   processJourneyLocation,
 } from "./journey-tracking.service";
@@ -30,145 +23,56 @@ export interface DriverLocationTrackingState {
   isTracking: boolean;
 }
 
-export async function requestDriverLocationPermission() {
-  const { status } = await Location.requestForegroundPermissionsAsync();
+/*
+ * FOREGROUND LOCATION ONLY
+ *
+ * Development testing:
+ * - Journey screen/app must remain active
+ *
+ * Release APK:
+ * - We will add background location
+ * - Android foreground service
+ * - TaskManager tracking
+ */
 
-  if (status !== "granted") {
+export async function requestDriverLocationPermission() {
+  try {
+    const currentPermission = await Location.getForegroundPermissionsAsync();
+
+    if (currentPermission.status === "granted") {
+      return {
+        granted: true,
+
+        error: null,
+      };
+    }
+
+    const permission = await Location.requestForegroundPermissionsAsync();
+
+    if (permission.status !== "granted") {
+      return {
+        granted: false,
+
+        error: new Error(
+          "Location permission is required to track the journey",
+        ),
+      };
+    }
+
+    return {
+      granted: true,
+
+      error: null,
+    };
+  } catch (error) {
+    console.log("DRIVER LOCATION PERMISSION ERROR:", error);
+
     return {
       granted: false,
 
-      error: new Error("Location permission is required to track the journey"),
+      error,
     };
   }
-
-  return {
-    granted: true,
-
-    error: null,
-  };
-}
-
-async function startForegroundFallback({
-  rideId,
-  trackingMode,
-}: {
-  rideId: string;
-
-  trackingMode: AdaptiveTrackingMode;
-}) {
-  const permissionResult = await requestDriverLocationPermission();
-
-  if (!permissionResult.granted) {
-    return {
-      started: false,
-
-      alreadyActive: false,
-
-      error: permissionResult.error,
-    };
-  }
-
-  if (locationSubscription) {
-    locationSubscription.remove();
-
-    locationSubscription = null;
-  }
-
-  activeRideId = rideId;
-
-  activeTrackingMode = trackingMode;
-
-  console.log("STARTING FOREGROUND GPS FALLBACK:", {
-    rideId,
-
-    trackingMode,
-  });
-
-  locationSubscription = await Location.watchPositionAsync(
-    {
-      accuracy: Location.Accuracy.High,
-
-      /*
-       * GPS can read more frequently.
-       *
-       * adaptive-tracking.service decides
-       * whether Supabase receives an upload.
-       */
-
-      timeInterval: 10_000,
-
-      distanceInterval: 100,
-    },
-
-    async (location) => {
-      if (processingLocation) {
-        console.log("FOREGROUND GPS READING SKIPPED: PROCESSING");
-
-        return;
-      }
-
-      if (!activeRideId) {
-        return;
-      }
-
-      processingLocation = true;
-
-      try {
-        const { latitude, longitude, accuracy } = location.coords;
-
-        console.log("FOREGROUND DRIVER GPS:", {
-          rideId: activeRideId,
-
-          latitude,
-
-          longitude,
-
-          accuracy,
-
-          trackingMode: activeTrackingMode,
-        });
-
-        const result = await processJourneyLocation({
-          rideId: activeRideId,
-
-          latitude,
-
-          longitude,
-
-          trackingMode: activeTrackingMode,
-        });
-
-        console.log("FOREGROUND GPS PROCESSED:", {
-          progress: result.routeProgress.progressPercentage.toFixed(2),
-
-          distanceFromRouteKm:
-            result.routeProgress.distanceFromRouteKm.toFixed(3),
-
-          detectedDeviation: result.routeProgress.routeDeviation,
-
-          confirmedDeviation: result.adaptiveResult.cache.routeDeviation,
-
-          uploaded: result.adaptiveResult.uploaded,
-
-          reason: result.adaptiveResult.reason,
-        });
-      } catch (error) {
-        console.log("FOREGROUND GPS PROCESS ERROR:", error);
-      } finally {
-        processingLocation = false;
-      }
-    },
-  );
-
-  console.log("FOREGROUND GPS FALLBACK STARTED:", rideId);
-
-  return {
-    started: true,
-
-    alreadyActive: false,
-
-    error: null,
-  };
 }
 
 export async function startDriverLocationTracking({
@@ -181,8 +85,59 @@ export async function startDriverLocationTracking({
   trackingMode?: AdaptiveTrackingMode;
 }) {
   /*
-   * Route must be prepared before either
-   * foreground or background GPS begins.
+   * SAME RIDE ALREADY TRACKING
+   */
+
+  if (locationSubscription && activeRideId === rideId) {
+    activeTrackingMode = trackingMode;
+
+    console.log("DRIVER TRACKING ALREADY ACTIVE:", {
+      rideId,
+
+      trackingMode,
+    });
+
+    return {
+      started: true,
+
+      alreadyActive: true,
+
+      error: null,
+    };
+  }
+
+  /*
+   * STOP OLD WATCHER
+   */
+
+  if (locationSubscription) {
+    locationSubscription.remove();
+
+    locationSubscription = null;
+  }
+
+  activeRideId = null;
+
+  processingLocation = false;
+
+  /*
+   * FOREGROUND PERMISSION
+   */
+
+  const permissionResult = await requestDriverLocationPermission();
+
+  if (!permissionResult.granted) {
+    return {
+      started: false,
+
+      alreadyActive: false,
+
+      error: permissionResult.error,
+    };
+  }
+
+  /*
+   * PREPARE ROUTE CACHE
    */
 
   try {
@@ -199,112 +154,141 @@ export async function startDriverLocationTracking({
     };
   }
 
-  /*
-   * Background tracking may already be
-   * active from a previous screen/app state.
-   */
-
-  const backgroundActive = await isBackgroundDriverTrackingRide(rideId);
-
-  if (backgroundActive) {
-    activeRideId = rideId;
-
-    activeTrackingMode = trackingMode;
-
-    await setBackgroundTrackingMode(trackingMode);
-
-    console.log("DRIVER BACKGROUND TRACKING ALREADY ACTIVE:", {
-      rideId,
-
-      trackingMode,
-    });
-
-    return {
-      started: true,
-
-      alreadyActive: true,
-
-      error: null,
-    };
-  }
-
-  /*
-   * Already using the foreground fallback
-   * for this ride.
-   */
-
-  if (locationSubscription && activeRideId === rideId) {
-    activeTrackingMode = trackingMode;
-
-    console.log("DRIVER FOREGROUND TRACKING ALREADY ACTIVE:", {
-      rideId,
-
-      trackingMode,
-    });
-
-    return {
-      started: true,
-
-      alreadyActive: true,
-
-      error: null,
-    };
-  }
-
-  /*
-   * Stop an old foreground watcher.
-   */
-
-  if (locationSubscription) {
-    locationSubscription.remove();
-
-    locationSubscription = null;
-  }
-
   activeRideId = rideId;
 
   activeTrackingMode = trackingMode;
 
-  /*
-   * Try background tracking first.
-   */
-
-  const backgroundResult = await startBackgroundDriverTracking({
+  console.log("STARTING DRIVER GPS:", {
     rideId,
 
     trackingMode,
   });
 
-  if (backgroundResult.started) {
-    console.log("DRIVER TRACKING MODE: BACKGROUND");
-
-    return backgroundResult;
-  }
-
-  /*
-   * Background permission/service may not
-   * be available during development.
-   *
-   * Fall back to the foreground watcher.
-   */
-
-  console.log(
-    "BACKGROUND GPS UNAVAILABLE. USING FOREGROUND FALLBACK:",
-    backgroundResult.error,
-  );
-
   try {
-    return await startForegroundFallback({
-      rideId,
+    locationSubscription = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.Highest,
 
-      trackingMode,
-    });
+        /*
+         * GPS can read frequently.
+         *
+         * Adaptive tracking controls
+         * Supabase uploads.
+         */
+
+        timeInterval: 5_000,
+
+        distanceInterval: 25,
+      },
+
+      async (location) => {
+        if (processingLocation) {
+          console.log("GPS READING SKIPPED: PROCESSING");
+
+          return;
+        }
+
+        const currentRideId = activeRideId;
+
+        if (!currentRideId) {
+          return;
+        }
+
+        const {
+          latitude,
+
+          longitude,
+
+          accuracy,
+        } = location.coords;
+
+        /*
+         * INVALID GPS
+         */
+
+        if (typeof latitude !== "number" || typeof longitude !== "number") {
+          console.log("INVALID DRIVER GPS READING");
+
+          return;
+        }
+
+        /*
+         * BAD GPS ACCURACY
+         *
+         * 100m+ readings can cause false
+         * route deviations.
+         */
+
+        if (typeof accuracy === "number" && accuracy > 100) {
+          console.log("LOW ACCURACY GPS READING SKIPPED:", accuracy);
+
+          return;
+        }
+
+        processingLocation = true;
+
+        try {
+          console.log("DRIVER GPS READING:", {
+            rideId: currentRideId,
+
+            latitude,
+
+            longitude,
+
+            accuracy,
+
+            trackingMode: activeTrackingMode,
+          });
+
+          const result = await processJourneyLocation({
+            rideId: currentRideId,
+
+            latitude,
+
+            longitude,
+
+            trackingMode: activeTrackingMode,
+          });
+
+          console.log("DRIVER GPS PROCESSED:", {
+            progress: result.routeProgress.progressPercentage.toFixed(2),
+
+            distanceFromRouteKm:
+              result.routeProgress.distanceFromRouteKm.toFixed(3),
+
+            detectedDeviation: result.routeProgress.routeDeviation,
+
+            confirmedDeviation: result.adaptiveResult.cache.routeDeviation,
+
+            uploaded: result.adaptiveResult.uploaded,
+
+            reason: result.adaptiveResult.reason,
+
+            checkpoint: result.adaptiveResult.checkpoint,
+          });
+        } catch (error) {
+          console.log("DRIVER GPS PROCESS ERROR:", error);
+        } finally {
+          processingLocation = false;
+        }
+      },
+    );
+
+    console.log("DRIVER GPS STARTED:", rideId);
+
+    return {
+      started: true,
+
+      alreadyActive: false,
+
+      error: null,
+    };
   } catch (error) {
     activeRideId = null;
 
-    activeTrackingMode = "normal";
+    processingLocation = false;
 
-    console.log("START FOREGROUND GPS ERROR:", error);
+    console.log("START DRIVER GPS ERROR:", error);
 
     return {
       started: false,
@@ -317,24 +301,10 @@ export async function startDriverLocationTracking({
 }
 
 export async function stopDriverLocationTracking() {
-  /*
-   * Stop foreground fallback.
-   */
-
   if (locationSubscription) {
     locationSubscription.remove();
 
     locationSubscription = null;
-  }
-
-  /*
-   * Stop native background tracking.
-   */
-
-  try {
-    await stopBackgroundDriverTracking();
-  } catch (error) {
-    console.log("STOP BACKGROUND GPS ERROR:", error);
   }
 
   const stoppedRideId = activeRideId;
@@ -354,16 +324,8 @@ export async function stopDriverLocationTracking() {
   };
 }
 
-export async function setDriverTrackingMode(
-  trackingMode: AdaptiveTrackingMode,
-) {
+export function setDriverTrackingMode(trackingMode: AdaptiveTrackingMode) {
   activeTrackingMode = trackingMode;
-
-  try {
-    await setBackgroundTrackingMode(trackingMode);
-  } catch (error) {
-    console.log("UPDATE BACKGROUND TRACKING MODE ERROR:", error);
-  }
 
   console.log("DRIVER TRACKING MODE UPDATED:", trackingMode);
 }
@@ -374,10 +336,10 @@ export function getDriverLocationTrackingState(): DriverLocationTrackingState {
 
     trackingMode: activeTrackingMode,
 
-    isTracking: locationSubscription !== null || activeRideId !== null,
+    isTracking: locationSubscription !== null,
   };
 }
 
 export function isDriverTrackingRide(rideId: string) {
-  return activeRideId === rideId;
+  return locationSubscription !== null && activeRideId === rideId;
 }
